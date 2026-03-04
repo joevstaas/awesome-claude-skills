@@ -1,0 +1,49 @@
+# Awesome Claude Skills
+
+A curated collection of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skills for data engineering, geospatial workflows, and ocean data.
+
+## What Are Claude Code Skills?
+
+Skills are reusable knowledge files (Markdown) that teach Claude Code domain-specific patterns, APIs, and best practices. When installed, Claude Code automatically activates the relevant skill based on your task — no manual prompting needed.
+
+## Available Skills
+
+| Skill | Description |
+|-------|-------------|
+| [odp-data-ingest](skills/odp-data-ingest/) | Ingest data into [Ocean Data Platform (ODP)](https://hubocean.earth) — datasets, file uploads, tabular data with PyArrow schemas, and spatial data with WKT geometries |
+
+## Installation
+
+### Option 1: Copy into your project
+
+```bash
+# Clone this repo
+git clone https://github.com/joevstaas/awesome-claude-skills.git
+
+# Copy a skill into your project's .claude/skills/ directory
+mkdir -p .claude/skills/odp-data-ingest
+cp awesome-claude-skills/skills/odp-data-ingest/SKILL.md .claude/skills/odp-data-ingest/
+```
+
+### Option 2: Copy into your global Claude config
+
+To make a skill available across all projects:
+
+```bash
+mkdir -p ~/.claude/skills/odp-data-ingest
+cp awesome-claude-skills/skills/odp-data-ingest/SKILL.md ~/.claude/skills/odp-data-ingest/
+```
+
+## Contributing
+
+Contributions are welcome! To add a new skill:
+
+1. Create a directory under `skills/` with a descriptive name
+2. Add a `SKILL.md` file with the YAML frontmatter (`description`) and comprehensive documentation
+3. Include real code examples that have been tested against the actual APIs
+4. Document known gotchas and limitations
+5. Open a pull request
+
+## License
+
+MIT
