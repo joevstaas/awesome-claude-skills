@@ -11,6 +11,7 @@ Skills are reusable knowledge files (Markdown) that teach Claude Code domain-spe
 | Skill | Description |
 |-------|-------------|
 | [odp-data-ingest](skills/odp-data-ingest/) | Ingest data into [Ocean Data Platform (ODP)](https://hubocean.earth) — datasets, file uploads, tabular data with PyArrow schemas, and spatial data with WKT geometries |
+| [odp-data-consume](skills/odp-data-consume/) | Consume and query data from [ODP](https://hubocean.earth) — tabular queries, geospatial filtering, aggregation, file downloads, and GeoJSON reconstruction |
 
 ## Installation
 

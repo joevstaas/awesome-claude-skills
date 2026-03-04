@@ -106,7 +106,9 @@ with open("data.geojson", "rb") as f:
     file_id = ds.files.upload("data.geojson", f)
 ```
 
-**Note:** `ds.files.update_meta()` has limited field support. Setting `"description"` will raise an error (`Cannot update field 'description'`). Only use `update_meta` for fields the API accepts (e.g., `"display_name"`).
+Upload also accepts raw bytes: `ds.files.upload("hello.txt", b"Hello World!")`
+
+**Note:** `ds.files.update_meta()` has limited field support. Supported fields: `name`, `format`. Setting `"description"` will raise an error.
 
 ### Step 3: Upload Tabular Data
 
@@ -188,7 +190,7 @@ schema = pa.schema([
 
 All metadata values must be strings. The metadata dict is passed to `pa.field(..., metadata={...})` and propagated to ODP when `ds.table.create(schema)` is called.
 
-## Working with Spatial Data (GeoJSON to ODP)
+## Working with Spatial Data (GeoJSON → ODP)
 
 ### Geometry Conversion
 
@@ -308,5 +310,3 @@ Use the STAC API for spatial/temporal queries — see the `odp-stac-api` skill.
 - **Mixed types** — if a GeoJSON property has mixed types across features (e.g., sometimes `int`, sometimes `string`), fall back to `pa.string()` for that column.
 - **Complex values** — lists and dicts in GeoJSON properties should be serialized to JSON strings before insertion.
 - **UUID primary keys** — always generate UUIDs for the `id` column; do not reuse source IDs as the primary key.
-- **`DatasetMeta` is a dataclass** — `get_dataset_meta_by_name()` returns a `DatasetMeta` object with `.id`, `.name`, `.description` attributes. Do not use dict-style access (`["id"]`).
-- **`files.update_meta()` limitations** — the `"description"` field is not supported and will raise an error. Only use supported fields like `"display_name"`.
