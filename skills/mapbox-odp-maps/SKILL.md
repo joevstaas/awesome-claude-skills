@@ -428,6 +428,75 @@ function setCache(key: string, data: unknown) {
 
 **Note**: In-memory cache works for dev and serverless (within a single invocation). For Vercel serverless, consider that each cold start resets the cache. For persistent caching, use Vercel KV or write to `/tmp`.
 
+## Stale Closures in Map Event Handlers
+
+**Critical bug pattern**: Mapbox event handlers are registered once during map initialization and capture the closure at that point. If a callback prop changes (e.g., due to React state updates), the map handler still calls the stale version.
+
+**Problem:**
+```tsx
+// BAD — click handler captures initial onStationSelect and never updates
+map.current.on("click", layerId, (e) => {
+  onStationSelect(e.features[0]); // stale closure!
+});
+```
+
+**Solution — use a ref:**
+```tsx
+// Keep a stable ref that always points to the latest callback
+const onStationSelectRef = useRef(onStationSelect);
+onStationSelectRef.current = onStationSelect;
+
+// In the map init effect, read from the ref
+map.current.on("click", layerId, (e) => {
+  onStationSelectRef.current(e.features[0]); // always fresh
+});
+```
+
+This is especially important when the callback depends on changing state (e.g., a "compare mode" toggle).
+
+## Null Safety After Async Operations
+
+When loading data inside `useEffect` with `async/await`, always check `map.current` after the await — the component may have unmounted and the map destroyed while waiting.
+
+```tsx
+const loadData = async () => {
+  const res = await fetch("/api/data");  // async gap
+  const geojson = await res.json();
+
+  if (!map.current) return;  // map may be gone!
+
+  map.current.addSource("data", { type: "geojson", data: geojson });
+};
+```
+
+**Avoid `map.current!`** — non-null assertions hide this bug. Use null checks instead.
+
+## Security Headers on Vercel
+
+`next.config.ts headers()` and Next.js middleware may NOT reliably set response headers on Vercel for cached/statically prerendered pages. Use `vercel.json` instead:
+
+```json
+{
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline' https://api.mapbox.com; img-src 'self' data: blob: https://*.mapbox.com; connect-src 'self' https://*.mapbox.com https://events.mapbox.com; worker-src 'self' blob:; child-src blob:; frame-src 'none'; object-src 'none'"
+        }
+      ]
+    }
+  ]
+}
+```
+
+The CSP must whitelist Mapbox domains for tiles, styles, workers, and telemetry.
+
 ## Common Pitfalls
 
 ### Next.js 16 / Turbopack issues
@@ -455,9 +524,14 @@ function setCache(key: string, data: unknown) {
 ### Popup issues
 15. **Low contrast text**: Mapbox popup default styles can make text nearly invisible. Always set explicit `color` on all text elements inside popup HTML (see Popup Styling section).
 
+### Event handler issues
+16. **Stale closure in click/hover handlers**: Map event handlers capture the closure at registration time. If callback props change later, handlers use stale values. Use a `useRef` to always read the latest callback (see "Stale Closures" section above).
+17. **Null map after async**: After any `await` inside a map `useEffect`, check `if (!map.current) return` — the map may have been destroyed. Never use `map.current!`.
+
 ### Vercel deployment
-16. **Serverless timeout**: Hobby plan has 10s timeout. Large ODP datasets may exceed this. Use `sample` parameter to limit rows.
-17. **Bundle size**: `apache-arrow` is large. Keep it server-side only with `serverExternalPackages`.
+18. **Serverless timeout**: Hobby plan has 10s timeout. Large ODP datasets may exceed this. Use `sample` parameter to limit rows.
+19. **Bundle size**: `apache-arrow` is large. Keep it server-side only with `serverExternalPackages`.
+20. **Security headers not applied**: `next.config.ts headers()` and middleware may not set headers on cached pages. Use `vercel.json` headers instead (see "Security Headers on Vercel" section).
 
 ## Debugging Checklist
 

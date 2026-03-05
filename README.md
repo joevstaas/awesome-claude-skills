@@ -12,7 +12,9 @@ Skills are reusable knowledge files (Markdown) that teach Claude Code domain-spe
 |-------|-------------|
 | [odp-data-ingest](skills/odp-data-ingest/) | Ingest data into [Ocean Data Platform (ODP)](https://hubocean.earth) — datasets, file uploads, tabular data with PyArrow schemas, and spatial data with WKT geometries |
 | [odp-data-consume](skills/odp-data-consume/) | Consume and query data from [Ocean Data Platform (ODP)](https://hubocean.earth) — tabular queries, geospatial filtering, aggregation, file downloads, and GeoJSON reconstruction |
+| [odp-stac-api](skills/odp-stac-api/) | Search for ocean data, marine datasets, and geospatial collections from [ODP](https://hubocean.earth) using the STAC API — spatial/temporal queries, collections, and items |
 | [mapbox-odp-maps](skills/mapbox-odp-maps/) | Build interactive maps with [Mapbox GL JS](https://docs.mapbox.com/mapbox-gl-js/) and ODP geodata in Next.js — setup, dynamic imports, CSS loading, geometry conversion, layer management, and common pitfalls |
+| [vannmiljo](skills/vannmiljo/) | Vannmiljo data pipeline — scrape water monitoring data from [vannmiljo.miljodirektoratet.no](https://vannmiljo.miljodirektoratet.no), build GeoJSON, and ingest into ODP |
 
 ## Installation
 
