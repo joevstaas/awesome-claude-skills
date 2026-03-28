@@ -291,6 +291,84 @@ The clean/re-ingest pattern:
 3. If found and not `--clean`: skip (already ingested)
 4. If not found: create new
 
+## Dataset Metadata Management
+
+The SDK does not have built-in methods for updating dataset metadata beyond name and description at creation time. Use the REST API directly via `client._request()` to update metadata after creation.
+
+### Metadata PATCH Endpoints
+
+Each metadata facet has its own endpoint at `/api/catalog/v2/datasets/{datasetId}/metadata/...`:
+
+| Endpoint | Method | Payload |
+|----------|--------|---------|
+| `.../general` | PATCH | `{name: str, description: str, tags: str[]}` |
+| `.../provider` | PATCH | `{provider_id: str}` — use an existing provider UUID |
+| `.../license` | PATCH | `{license_enum: str}` — e.g. `"CC-BY-4.0"` |
+| `.../citation` | PATCH | `{text: str, link: str}` |
+| `.../additional-info` | PATCH | Free-form JSON object (any keys) |
+| `.../constraints` | PATCH | `{constraints: [{text: str}]}` |
+| `.../documentation` | PATCH | `{documentation: str[]}` |
+
+### Example: Update All Metadata
+
+```python
+import requests
+
+base = f"{client.base_url}/api/catalog/v2/datasets/{dataset_id}/metadata"
+
+# General: name, description, tags
+client._request(requests.Request(
+    method="PATCH",
+    url=f"{base}/general",
+    json={
+        "name": "My Dataset",
+        "description": "A detailed description of the dataset.",
+        "tags": ["ocean", "marine", "monitoring"],
+    },
+), retry=False).raise_for_status()
+
+# Provider (use an existing provider UUID — find via GET /api/catalog/v2/providers or the portal)
+client._request(requests.Request(
+    method="PATCH",
+    url=f"{base}/provider",
+    json={"provider_id": "ec54f2cd-e56c-4ac0-8d29-82654090e658"},  # HUB Ocean
+), retry=False).raise_for_status()
+
+# License
+client._request(requests.Request(
+    method="PATCH",
+    url=f"{base}/license",
+    json={"license_enum": "CC-BY-4.0"},
+), retry=False).raise_for_status()
+
+# Citation
+client._request(requests.Request(
+    method="PATCH",
+    url=f"{base}/citation",
+    json={
+        "text": "My Project (2026). Dataset Name. Ocean Data Platform.",
+        "link": "https://github.com/org/repo",
+    },
+), retry=False).raise_for_status()
+
+# Additional info (free-form — use for geographic coverage, update frequency, etc.)
+client._request(requests.Request(
+    method="PATCH",
+    url=f"{base}/additional-info",
+    json={
+        "geographic_coverage": "Global — Atlantic, Pacific, Indian oceans",
+        "temporal_coverage": "2025-01-01 to present",
+        "update_frequency": "Daily (automated)",
+    },
+), retry=False).raise_for_status()
+```
+
+### Important Notes on Metadata
+
+- **Provider:** The `custom_provider` field with `{name, description, website, kind}` exists but the `kind` enum validation is strict and undocumented. Using an existing `provider_id` is more reliable.
+- **Geographic coverage:** There is no dedicated spatial extent endpoint for datasets. The spatial bounds shown in the portal are auto-computed from the geometry column in the tabular data. Use `additional-info` for descriptive geographic coverage text.
+- **Full PUT:** `PUT /api/catalog/v2/datasets/{datasetId}` replaces all metadata at once but requires every field — prefer the granular PATCH endpoints.
+
 ## Reading Data Back from ODP
 
 ### Download a raw file
