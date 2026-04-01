@@ -54,9 +54,9 @@ for field in schema:
 
 ## Python SDK: Querying Tabular Data
 
-### Select All Rows
+### Select All Rows (No Filter)
 
-The tabular API returns data in batches via a cursor. Iterate to collect all rows:
+The tabular API returns data in batches via a cursor. Iterate to collect all rows. **Only use this for small datasets** — for large datasets, always use server-side filters (see Filtering Rows below):
 
 ```python
 ds = client.dataset("dataset-uuid")
@@ -74,9 +74,9 @@ for batch_df in cursor.dataframes():
 print(f"Loaded {len(df)} rows with columns: {list(df.columns)}")
 ```
 
-### Filtering Rows
+### Filtering Rows (Preferred for Large Datasets)
 
-The `select()` method supports SQL-like filter expressions evaluated server-side:
+**IMPORTANT:** Always use server-side filters when querying large datasets. Datasets can have millions of rows — scanning client-side is extremely slow and will likely time out. The `select()` method accepts a `filter` parameter with SQL/Arrow-style expressions, including geospatial operations. This pushes filtering to the server.
 
 ```python
 # Basic comparison
@@ -85,14 +85,26 @@ cursor = ds.table.select(filter='depth_m > 10')
 # Combined filters
 cursor = ds.table.select(filter='count >= 5 AND method == "Undervannsvideo"')
 
-# Bind variables
+# Null checks
+cursor = ds.table.select(filter='notes is not null')
+```
+
+#### Parameterized Queries
+
+Use `vars` to pass variables safely:
+
+```python
+# Named variables
 cursor = ds.table.select(
     filter='depth_m >= $min_depth AND depth_m <= $max_depth',
     vars={"min_depth": 5.0, "max_depth": 15.0}
 )
 
-# Null checks
-cursor = ds.table.select(filter='notes is not null')
+# Positional variables
+cursor = ds.table.select(
+    filter='year >= ? AND year < ?',
+    vars=[2020, 2025]
+)
 ```
 
 ### Geospatial Filtering (Server-Side)
@@ -112,7 +124,18 @@ cursor = ds.table.select(filter=f'geometry within "{bbox_wkt}"')
 | `intersect` | `geometry intersect "POLYGON (...)"` | Geometries that overlap |
 | `contains` | `geometry contains "POLYGON (...)"` | Geometries that enclose the given polygon |
 
-To convert a GeoJSON geometry to WKT for use in filters:
+#### Combining Column + Geo Filters
+
+Column and geo filters can be combined in a single query for maximum efficiency:
+
+```python
+# Filter by taxonomy AND geography in one server-side query
+cursor = ds.table.select(
+    filter='family = "Acipenseridae" AND geometry within "POLYGON ((-74.5 39.5, -72.0 39.5, -72.0 41.0, -74.5 41.0, -74.5 39.5))"'
+)
+```
+
+#### Converting GeoJSON to WKT for Filters
 
 ```python
 from shapely.geometry import shape
@@ -253,7 +276,7 @@ ds.files.update_meta(file_id, {"name": "renamed_file.geojson", "format": "geojso
 
 ## Python SDK: Reconstructing GeoJSON from Tabular Data
 
-When spatial data was ingested as tabular (WKT geometry), reconstruct GeoJSON:
+When spatial data was ingested as tabular (WKT geometry), reconstruct GeoJSON. Use server-side filters to limit the data before reconstruction:
 
 ```python
 import json
@@ -261,7 +284,10 @@ from shapely import wkt
 from shapely.geometry.base import BaseGeometry
 
 ds = client.dataset("dataset-uuid")
-cursor = ds.table.select()
+# Use filters to avoid downloading the entire dataset
+cursor = ds.table.select(
+    filter='family = "Acipenseridae" AND geometry within "POLYGON ((-74.5 39.5, -72.0 39.5, -72.0 41.0, -74.5 41.0, -74.5 39.5))"'
+)
 
 features = []
 for batch_df in cursor.dataframes():
@@ -468,6 +494,7 @@ def load_data(dataset_id: str):
 
 ## Tips and Gotchas
 
+- **Always use server-side filters on large datasets** — datasets can have millions of rows. Scanning client-side is extremely slow and will likely time out. Use the `filter` parameter on `ds.table.select()` with column filters and/or geo filters. Column and geo filters can be combined in a single expression with `AND`.
 - **Tabular data comes in batches** — always iterate `cursor.dataframes()` and concatenate. A single batch may not contain all rows.
 - **Geometry may be WKT or Shapely objects** — the SDK sometimes returns parsed `BaseGeometry` objects instead of WKT strings. Handle both cases.
 - **NaN values are common** — nullable columns return `float('nan')` for missing values. Always check with `val != val` or `pd.isna(val)`.
