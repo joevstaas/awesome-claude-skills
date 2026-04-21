@@ -10,6 +10,7 @@ Skills are reusable knowledge files (Markdown) that teach Claude Code domain-spe
 
 | Skill | Description |
 |-------|-------------|
+| [odp-data-exploration](skills/odp-data-exploration/) | Triage unknown data files (CSV, Parquet, JSON, GeoJSON, Shapefile, GeoTIFF, NetCDF, JPEG, GPX) — inventory + syntactic + semantic data-quality checks with a geospatial focus, detects mid-dataset protocol changes (sensor swaps, calibration shifts), and produces pre-ingestion advice for [ODP](https://hubocean.earth) |
 | [odp-data-ingest](skills/odp-data-ingest/) | Ingest data into [Ocean Data Platform (ODP)](https://hubocean.earth) — datasets, file uploads, tabular data with PyArrow schemas, and spatial data with WKT geometries |
 | [odp-data-consume](skills/odp-data-consume/) | Consume and query data from [Ocean Data Platform (ODP)](https://hubocean.earth) — tabular queries, geospatial filtering, aggregation, file downloads, and GeoJSON reconstruction |
 | [odp-stac-api](skills/odp-stac-api/) | Search for ocean data, marine datasets, and geospatial collections from [ODP](https://hubocean.earth) using the STAC API — spatial/temporal queries, collections, and items |
