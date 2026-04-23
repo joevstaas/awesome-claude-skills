@@ -1,5 +1,5 @@
 ---
-description: Triage unknown data files (CSV, Parquet, JSON, GeoJSON, Shapefile, GeoTIFF, NetCDF, JPEG, GPX, …). Runs inventory + syntactic + semantic data-quality checks with a geospatial focus, detects mid-dataset protocol changes (sensor swaps, calibration shifts, changed measurement conventions), and produces pre-ingestion advice for the Ocean Data Platform (ODP). Use when the user wants to understand, quality-check, or prepare a data file for visualisation or ingestion.
+description: Run a data-quality check on an unknown file (CSV, Parquet, JSON, GeoJSON, Shapefile, GeoTIFF, NetCDF, JPEG, GPX, …). Produces an inventory, syntactic checks, optional semantic checks, optional mid-dataset protocol-change checks (sensor swaps, calibration shifts, changed measurement conventions), and pre-ingest advice for the Ocean Data Platform (ODP). Use when the user wants to understand, quality-check, or prepare a data file for visualisation or ingestion.
 ---
 
 # ODP Data Exploration
@@ -16,16 +16,29 @@ Skip when the user is asking a pure coding question, or when they want the actua
 
 ## Core principles
 
-1. **Two passes always, in this order.** Syntactic first (is it well-*formed*?), semantic second (does it make sense in the *world*?). Mixing them hides real issues.
-2. **Never modify raw data in place.** Produce a *cleaned derivative*; the raw file stays untouched. When recommending action, phrase as filter/transform rules, not mutations.
-3. **Three outcomes per issue: drop the row / drop the field / keep + flag.** Most noisy data has *some* real information — dropping whole rows because one channel is broken is wasteful.
-4. **Plain-language output.** The user may not speak data-science jargon. Translate every numeric finding into a takeaway: *"41 fixes at exactly (0, 0) — failed GPS acquisitions the tag logged as valid; drop before mapping."* Numbers alone are not a report.
+1. **Syntactic first, semantic second — and only what was asked for.** If the user asks for a syntactic check, do that and stop. Do not proactively pitch the next pass, solicit plausibility ranges, or ask for codebooks that weren't requested. Mixing passes hides real issues; expanding scope unasked erodes trust.
+2. **Never modify the raw file — always write a new, clearly-labelled copy.** The raw file stays untouched. When producing a quality-corrected derivative, save next to the source with a filename that makes its nature obvious at a glance, in the user's language:
+   - Norwegian: `<basename>.kvalitetsrettet.<ext>` (or `.ryddet.<ext>` if the user uses that word).
+   - English: `<basename>.cleaned.<ext>` (or `.qc.<ext>`).
+   Also write a sibling reject log `<basename>.rejected.<ext>` with a `reason` column recording every row that was dropped and why. When recommending action, phrase as filter/transform rules, not mutations.
+3. **Three outcomes per issue: drop the row / drop the field / keep and flag.** Most noisy data has *some* real information — dropping whole rows because one channel is broken is wasteful.
+4. **Plain language, user's language, no specialist jargon.** The audience typically knows their data and their capture protocols very well, but is not a data-quality specialist. Avoid specialist terminology — **do not use words like** *triage, coercion, coerce, mojibake, bug, dtype, schema overload, type surprise, null island, fractional check, sanity check, anomaly, entity-level*. If a technical concept genuinely needs a name, pick a domain word the user already uses, or name it once and explain it in the same sentence. Match the user's language throughout — if they write Norwegian, the chat summary, the report file, filenames for derived outputs, and closing questions are all in Norwegian. Translate every numeric finding into a takeaway: *"41 posisjoner ligger på (0, 0) — GPS fikk ikke lås og har logget det som gyldig; fjern før kartlegging."* Numbers alone are not a report.
 5. **Geospatial means "where on Earth" is a first-class dimension.** Always report bbox, CRS, and — for outliers — the actual place name or a distance from something the user recognises. Include OpenStreetMap links (`https://www.openstreetmap.org/?mlat=<lat>&mlon=<lon>&zoom=11`) for individual suspect points.
-6. **Honest about role.** The skill runs the code; the user decides what to do with findings. Surface decisions, don't make them silently.
+6. **Quiet while working; concrete at the end.** Bundle all checks into one self-contained script saved next to the source (see §Running the checks). Do not dump intermediate output, tables, or tracebacks in chat. If a probe turns out to be wrong, fix it silently and rerun — the user sees the final findings, not the debugging path. In chat: one sentence before you start, one short update if direction changes, one tight summary at the end.
+7. **End with concrete, answerable questions — not open-ended ones.** The closing of every report and every chat summary should be up to three specific questions the user can answer "yes / no" or "A / B / C". Each question asks about fixing something *found*, not about expanding scope. Example: *"Vil du at jeg bygger en ryddeversjon som fjerner de 44 (0, 0)-radene og parser de 50 grad-minutt-radene til desimalgrader?"* — not *"Hva vil du gjøre videre?"*
 
-## Workflow — four passes
+## Workflow — four passes (run only what was asked)
 
-Work through all four, in order. Skip a pass only if the file truly doesn't support it (e.g. protocol-change is meaningless on a single-image file).
+The four passes below are the full menu. **Which ones you run is driven by the user's request, not by the skill.** Default behaviour when the user says:
+
+- *"what is this file?"* / *"have a look"* → Pass 1 only, report briefly.
+- *"syntactic / syntaktisk check"* / *"is it well-formed?"* → Passes 1 + 2.
+- *"quality check"* (unqualified) → Passes 1 + 2. Offer Pass 3 as a single yes/no question at the end; do not pre-specify its inputs.
+- *"semantic / semantisk check"* / *"any outliers?"* → Passes 1 + 2 + 3.
+- *"did something change mid-dataset?"* / *"sensor swap?"* → Passes 1 + 4 (and 2 if the file hasn't been checked before).
+- *"full check"* / *"everything"* → All four passes, in order.
+
+Passes must still run in order when multiple are requested (syntactic before semantic before protocol-change — earlier passes catch issues that would otherwise masquerade as semantic problems). Skip a pass only if the file truly doesn't support it (e.g. protocol-change is meaningless on a single-image file).
 
 ### Pass 1 — Inventory
 
@@ -132,44 +145,59 @@ PELT / CUSUM / Bayesian change-point are overkill for first pass — a rolling-w
 
 Always **report the change in plain language**: *"sensor 374294 reports conductivity around 35 PSU from Nov 5–Nov 11, then jumps to ~42 PSU from Nov 12 onwards — pattern consistent with a recalibration event. Confirm with deployment log before treating either half as truth."*
 
-## Output: the triage report
+## Running the checks — one reproducible script
 
-Produce a single report with these sections, in this order:
+Bundle every probe into a single self-contained Python script saved next to the source, e.g. `<basename>.kvalitetssjekk.py` (Norwegian) or `<basename>.qualitycheck.py` (English). The user should be able to run that one file and reproduce the whole report. Do not paste intermediate script output into the chat; do not narrate debug iterations. If a probe has a flaw, revise the script quietly and rerun — then tell the user once: *"Scriptet er lagret som `…kvalitetssjekk.py` og kan kjøres manuelt for å gjenta sjekken."*
+
+## Output — the quality-check report
+
+Produce one report file next to the source. Use the user's language. Filename:
+- Norwegian: `<basename>.kvalitetssjekk.md` (title: *"Datakvalitetssjekk — <filename>"*)
+- English: `<basename>.qualitycheck.md` (title: *"Quality check — <filename>"*)
+
+Report structure (section names in user's language; English shown with Norwegian equivalent):
 
 ```
-# Triage report — <filename>
+# Datakvalitetssjekk — <filename>     (or: "Quality check — <filename>")
 
-## 1. Inventory
-  - format, size, rows/features, schema table, spatial extent, temporal extent, entities
+## 1. Oversikt / Inventory
+  - format, size, rows × columns, schema summary, spatial extent, temporal extent,
+    entities, primary key
 
-## 2. Syntactic quality — N issues
-  - one bullet per finding, severity, "what it means"
+## 2. Syntaktiske funn / Syntactic findings — N saker
+  - ranked HIGH / MEDIUM / LOW; each finding leads with plain-language takeaway,
+    then numbers, then what it means for downstream use
+  - omit this section if a syntactic pass wasn't requested
 
-## 3. Semantic quality — N issues
-  - one bullet per finding, with location (for geo) and plain-language interpretation
-  - OSM links for individual suspect points
+## 3. Semantiske funn / Semantic findings — only if requested
+  - OMIT entirely if the user asked for a syntactic check only. Do not include
+    a stub, placeholder, or "run this later" teaser.
 
-## 4. Protocol changes — N suspected
-  - per-entity narrative; what column, what window, what kind of shift
+## 4. Protokoll-endringer / Protocol-change findings — only if requested
+  - OMIT entirely otherwise.
 
-## 5. ODP ingestion verdict
-  - target dataset type (tabular / vector / raster / file)
-  - volume class (trivial / normal / partition / stream)
-  - blocking issues (CRS, invalid geometries, schema drift)
-  - recommended pre-ingest transformations
+## 5. Ingest-vei / Recommended ODP ingest route
+  - target dataset type (tabular / vector / raster / file), volume class,
+    blocking issues, recommended pre-ingest transformations
 
-## 6. Action list — ranked
-  | Priority | Rule                                        | Outcome                  |
-  | H        | drop rows where lat == 0 and lon == 0       | removes 41 failed fixes  |
-  | H        | drop field altitude where depth_m > 0       | keeps position, removes  |
-  |          |                                             | nonsensical altitude     |
-  | M        | flag rows in conductivity-shift window      | don't modify, annotate   |
-  | L        | dedupe (entity, timestamp, datatype)        | removes 9 duplicates     |
+## 6. Tiltaksliste / Action list — rangert
+  | Prio | Regel / Rule                               | Utfall / Effect        |
+  | H    | fjern rader der lat==0 og lon==0           | -41 mislykka GPS-fix   |
+  | H    | parse grad-minutt-rader til desimalgrader  | +50 rader i kartet     |
+  | M    | strip 'Z' fra stationstartdate             | korrekt dato-type      |
 ```
 
 Rank actions High / Medium / Low based on: impact on downstream analysis, proportion of data affected, and reversibility.
 
-If the user is going to act on the report, offer (don't assume) to write it to a file: `<filename>.triage.md` alongside the source. Never write the cleaned data automatically — the user decides which rules to apply.
+**At the end of the report, a "Neste skritt / Next steps" block with up to three concrete yes/no (or A/B) questions** that act on what was *found*. Example:
+
+> - Vil du at jeg bygger en ryddeversjon (`<basename>.kvalitetsrettet.csv`) som fjerner de 44 (0, 0)-radene, parser de 50 grad-minutt-radene og konverterer True/False til 1/0? (ja / nei)
+> - Skal raden med lon = 45,00 droppes (A), flagges (B), eller beholdes uendret (C)?
+> - Skal de 45 tomme kolonnene fjernes i ryddeversjonen? (ja / nei)
+
+No open-ended "hva vil du gjøre videre?" / "let me know what to do next". The user should be able to answer by replying with a single letter or word.
+
+Offer to write the report (don't assume). Never write a cleaned data file automatically — the user answers the yes/no questions first, then you materialise the fixes into `<basename>.kvalitetsrettet.<ext>` plus `<basename>.rejected.<ext>`.
 
 ## Format handlers — quick reference
 
@@ -281,14 +309,15 @@ Route by data shape:
 
 For ingestion mechanics (SDK calls, manifest structure, schema registration), hand off to the `odp-data-ingest` skill.
 
-## Working style — carry over from the user's established preferences
+## Working style
 
-- Lead with plain-language interpretation; put numbers after, not before
-- Use analogies when introducing new terminology — the user may be building vocabulary
-- For every suspect point in geo data, tell the user **where it is**, not just its coordinates
-- When recommending rules, write them as code the user can paste, not prose
-- Be honest about analyst vs tooling: the skill runs checks; the user owns decisions
-- Ask for plausibility ranges per column rather than guessing — domain knowledge lives with the user
+- **Language match.** Summary, report, filenames for derived files, and closing questions — all in the user's language (Norwegian if they write Norwegian).
+- **Plain words.** Lead with the interpretation, put numbers after. No specialist jargon (see Principle 4). When a needed word *is* jargon, define it in the same sentence or pick a term the user already uses.
+- **One sentence before, one tight summary after.** In chat, state what you're about to do in one sentence, and at the end give a short summary (≈ 4–10 lines) plus the closing questions. No running narration of what the script is doing, no mid-run tables.
+- **For every suspect geospatial point, tell the user where it is** — a recognised place, a distance from an anchor, and an OSM link.
+- **Write rules as concrete actions**, not prose. "Fjern rader der lat==0 og lon==0" beats "consider addressing the invalid coordinate tuples".
+- **Stay in scope.** If the user asked for a syntactic check, do that and stop. Don't pitch the next pass or request inputs for a pass nobody asked for.
+- **Surface options, don't act silently.** Ask yes/no questions before producing a cleaned file.
 
 ## Pitfalls
 
@@ -296,7 +325,11 @@ For ingestion mechanics (SDK calls, manifest structure, schema registration), ha
 - **Assuming WGS84.** Many datasets ship in UTM, national grids, or web mercator. Check CRS before plotting.
 - **Averaging over entities.** A protocol change in one of 50 devices disappears in the grand mean. Always group by entity first.
 - **Reporting "N outliers" without showing where.** Means nothing to a human. Always localise.
-- **Silent mutation.** Never write to the raw file. Always derive.
-- **Dropping rows without recording why.** Produce a reject log (`<filename>.rejected.csv` with a `reason` column) whenever rules are applied.
+- **Silent mutation.** Never write to the raw file. Always derive — with a filename that makes the quality-corrected nature obvious.
+- **Dropping rows without recording why.** Produce a reject log (`<basename>.rejected.<ext>` with a `reason` column) whenever rules are applied.
 - **Treating protocol change as outlier noise.** If a shift is coherent (many columns change at the same timestamp), it's a protocol event, not noise — investigate before filtering.
 - **Over-cleaning.** If 30 % of your rows get dropped, you are probably applying rules with too narrow a plausibility spec. Re-confirm with the user.
+- **Running commentary on debugging.** The user sees the chat. They should not see a probe going wrong, being fixed, and rerunning. Iterate silently in the script file; report once.
+- **Unasked-for scope creep.** Don't close a syntactic report by soliciting plausibility ranges or enum codebooks. If a next pass is genuinely warranted, *offer it as a single yes/no question* — don't pre-specify its inputs.
+- **Specialist jargon in chat.** Words like *triage, bug, coerce, dtype, mojibake, fractional check, schema overload* are cheap to write and expensive to read. Use plain Norwegian / plain English, or a domain term the user uses, instead.
+- **Open-ended closing questions.** "Hva vil du gjøre videre?" / "Let me know how to proceed" puts the work back on the user. Close with concrete yes/no questions about *findings*.
