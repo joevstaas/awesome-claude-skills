@@ -350,7 +350,7 @@ Don't generate executable Python here — recipe sketches only. The actual code 
 | Find data from the University of Bergen collected in 2026 | `q=Provider:"University of Bergen"`, `beginDate=2026-01-01T00:00:00Z`, `endDate=2026-12-31T23:59:59Z`, `dateSearchMode=isWithin` |
 | Give me an overview of all the data | `GET /metadata-api/getFacets` → render full taxonomy with counts |
 | List all the data providers | `GET /metadata-api/getFacets` → render Provider facet only |
-| Find microplastic data from Mareano | `q=(*microplastic* OR *mareano*)` (both as free text — Mareano matches in titles and provider) |
+| Find microplastic data from Mareano | `q=(*microplastic* OR *mareano*)` (both as free text — Mareano is a programme name that appears as a `MAREANO -` prefix in `Entry_Title`, not a separate Provider) |
 | Find datasets captured last month | `beginDate=<first day of previous month>`, `endDate=<last day of previous month>`, `dateSearchMode=isWithin` (resolved against today) |
 
 Sort-style prompts ("the latest dataset in the Oslofjord", "most recent NIVA data") are not supported. Ask the user for a concrete period instead — the API has no `sort` parameter.
