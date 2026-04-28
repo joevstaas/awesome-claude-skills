@@ -324,6 +324,24 @@ For datasets with more than 20 files, do these requests with a **max-in-flight b
 
 Don't run the on-demand probe automatically — only when the user asks. It costs N round-trips per dataset and the metadata catalog answers most questions on its own.
 
+### Content probe (sample inside the file)
+
+A reachability probe (`HEAD`, `.dds`/`.das`) only confirms the URL is alive. Before giving a non-trivial **ODP feasibility verdict** — or whenever the user asks "what's actually inside", "shape of the data", "look inside", "sample it", "how many rows" — pull **one** representative file, open it, and verify the catalog claims hold. Skip if the dataset is catalog-only (no `Data_URL`).
+
+Cap the download at ~50 MB without asking; for larger files, ask the user before pulling, or use a range request / OPeNDAP slice.
+
+### Tabular row-count estimate
+
+When the user asks "how many rows" / "how big is this as a table" / for an ingest size estimate, and the dataset is tabular (CSV/TSV) or fans out to a tabular shape (NetCDF profiles → row-per-(cast,depth); JSON time-series → row-per-timestamp):
+
+1. Sample **one** inner file (smallest if sizes vary, otherwise the first).
+2. Count rows in that file: CSV line count minus header; NetCDF `dims` product for the relevant axes; JSON time-series → `len(dataPoints)` (and **also** read `totalCount` if present).
+3. Multiply by the total file count from the directory listing or the catalog `Data_URL` array.
+4. If `isLimited: True` (Blue Insight) **report two numbers**: the *delivered* estimate (using `len(dataPoints)`) and the *target* estimate (using `totalCount`). The gap is the truncation loss.
+5. Round to 2 significant figures and state assumptions explicitly ("assumes all 524 hourly files have ~1000 delivered rows; target was ~3600/hr").
+
+Example phrasing: *"~524 K delivered rows across the leg (1000/hr × 524 files), out of a target ~1.9 M rows — 28 % coverage due to Blue Insight truncation."*
+
 ## ODP feasibility advisory
 
 When the user asks whether an NMDC dataset can go into ODP, classify on three axes:
@@ -378,3 +396,4 @@ Sort-style prompts ("the latest dataset in the Oslofjord", "most recent NIVA dat
 - **Norwegian month name ambiguous with English.** "Mai" is May; "Mars" is March. If the surrounding sentence is mixed-language, ask the user to clarify rather than guessing.
 - **Landing page parse fails.** If a landing page returns 404 or doesn't contain the expected fields, render the catalog fields you do have and note "landing page details unavailable — see <URL>".
 - **Probe times out on >5 files.** Don't block. Report the rows you got, mark the rest as "timeout", and let the user decide whether to retry.
+- **`Data_URL` returns 404 on `ftp.nmdc.no`.** Don't conclude the file is missing. The catalog lowercases filenames while the server preserves original case — list the parent directory and retry with the actual case.
