@@ -16,6 +16,7 @@ Skills are reusable knowledge files (Markdown) that teach Claude Code domain-spe
 | [odp-stac-api](skills/odp-stac-api/) | Search for ocean data, marine datasets, and geospatial collections from [ODP](https://hubocean.earth) using the STAC API — spatial/temporal queries, collections, and items |
 | [mapbox-odp-maps](skills/mapbox-odp-maps/) | Build interactive maps with [Mapbox GL JS](https://docs.mapbox.com/mapbox-gl-js/) and ODP geodata in Next.js — setup, dynamic imports, CSS loading, geometry conversion, layer management, and common pitfalls |
 | [vannmiljo](skills/vannmiljo/) | Vannmiljo data pipeline — scrape water monitoring data from [vannmiljo.miljodirektoratet.no](https://vannmiljo.miljodirektoratet.no), build GeoJSON, and ingest into ODP |
+| [nmdc-explore](skills/nmdc-explore/) | Search and inspect datasets in the [Norwegian Marine Data Centre (NMDC)](http://metadata.nmdc.no/UserInterface/) — natural-language queries by keyword, provider, geography, and period; dataset detail views with file lists and on-demand link/size probing; and ODP ingestion feasibility advice |
 
 ## Installation
 
