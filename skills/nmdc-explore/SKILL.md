@@ -57,14 +57,25 @@ Each result document carries these fields (subset relevant to the skill):
 | `location_rpt` | WKT — either `"lon lat"` for a point or `"POLYGON((lon lat, ...))"` |
 | `landingpage` | Full URL to the landing page |
 | `Data_URL` | Stringified array of URL-encoded file URLs |
-| `Data_URL_Type` | Stringified array of access type tags (`GET DATA`, `PARENT`, `Access to OPeNDAP service`, …) |
+| `Data_URL_Type` | Stringified array of access type tags (`GET DATA`, `PARENT`, `PART`, `VIEW PROJECT HOME PAGE`, `Access to OPeNDAP service`, …) |
 | `Data_URL_Subtype` | Stringified array of subtype tags (`OPENDAP DATA (DODS)`, …) |
+
+**Hierarchical records.** `Data_URL` and `Data_URL_Type` are parallel arrays. NMDC catalog records form a tree (e.g. **Expedition Overview → Leg → Instrument**), encoded with three distinguished tags:
+
+- `PARENT` — single entry pointing UP to the immediate parent's landing page. Always URL-decode and surface it.
+- `PART` — multiple entries pointing DOWN to children's landing pages. Top-level Overview records expose all descendants this way.
+- `VIEW PROJECT HOME PAGE` — points to an external project website (not an NMDC record). Surface as a project link.
+
+Two consequences to plan for:
+
+1. **Chains can be 2+ levels deep** and the `PARENT` pointer may skip a level (e.g. an instrument dataset whose `PARENT` points straight at the Expedition Overview, not the Leg). When summarising results, don't trust that the immediate parent is the umbrella — look for a record in the result set with `PART` entries, or with a title prefix like `Overview - …`.
+2. **DOI and license commonly live on the topmost Overview record, not on sub-datasets.** Before reporting "no DOI" or "license unknown", walk the `PARENT` chain (or look for a sibling `PART`-bearing record in the results) and re-check there.
 
 ## Capabilities
 
 | # | Capability | Trigger phrases | What it does |
 |---|---|---|---|
-| 1 | **Search** | "find …", "datasets about …", "data covering …" | Map natural language to a Solr `q`, call `GET /metadata-api/search`, render a ranked list with title, provider, dates, and area. |
+| 1 | **Search** | "find …", "datasets about …", "data covering …" | Map natural language to a Solr `q`, call `GET /metadata-api/search`, render a ranked list with title, provider, dates, and area. If the result set contains an Overview / umbrella record (one whose `Data_URL_Type` includes `PART` entries, or whose title starts with `Overview - …`), promote it to the top — that's where the DOI and license live. Otherwise, when results share a single immediate parent, surface the parent URL once at the top; for mixed parents, include each parent inline. Do not let title-pattern aggregation (e.g. parsing `LegN - Instrument` out of titles) silently drop records that don't match the pattern. |
 | 2 | **Browse taxonomy** | "overview of all data", "list providers", "what keywords exist" | `GET /metadata-api/getFacets` and render the facet tree with counts. |
 | 3 | **Dataset detail** | "tell me about Entry_ID X", drill-down after a search | Combine catalog fields with the parsed landing page to show file list, types, stated sizes, license, and summary. |
 | 4 | **ODP feasibility** | "can this go into ODP?", "how would I ingest this?" | Verdict (file / tabular / manual / skip) plus a recipe sketch that hands off to `odp-data-ingest`. |
@@ -278,21 +289,22 @@ When the user drills into a single dataset, render in this order:
 
 1. **Title** — `Entry_Title`
 2. **Identifier** — `Entry_ID`
-3. **DOI** — `Dataset_DOI` (linked as `https://doi.org/<doi>`)
-4. **Provider(s)** — parsed from the stringified array
-5. **Personnel** — first author from `Dataset_Creator`, plus `PersonFirstName` / `PersonLastName` if useful
-6. **Summary** — `Data_Summary`, first 400 characters with ellipsis if longer
-7. **Temporal coverage** — `Start_Date` → `Stop_Date`, normalised to `YYYY-MM-DD`
-8. **Spatial coverage** — bbox of the `location_rpt` polygon (or the point coordinates). Also write `nmdc-detail-<entryid>.geojson` to cwd so the user can open it visually.
-9. **License** — parsed from the landing page (`GET /metadata-api/landingpage/<hash>`). Look for "Use Constraints" or "License" anchor text. If not found, mark as "unknown".
-10. **File list** — parsed from the same landing page. For each `Data_URL`:
+3. **DOI** — `Dataset_DOI` (linked as `https://doi.org/<doi>`). If empty on this record, walk up the `PARENT` chain and report the first DOI you find, labelled with which level it came from (e.g. *"DOI (inherited from Overview)"*).
+4. **Parent collection** — if any `Data_URL_Type` entry equals `PARENT`, render the URL-decoded `Data_URL` at the same index as a labelled link (e.g. *"Parent: One Ocean Expedition 2025-2026 — http://metadata.nmdc.no/metadata-api/landingpage/&lt;hash&gt;"*). Always include this when present. Optionally fetch the parent landing page once to read its `<title>` for the label. If the parent itself has its own `PARENT`, walk one more level so the user can see the full chain.
+5. **Provider(s)** — parsed from the stringified array
+6. **Personnel** — first author from `Dataset_Creator`, plus `PersonFirstName` / `PersonLastName` if useful
+7. **Summary** — `Data_Summary`, first 400 characters with ellipsis if longer
+8. **Temporal coverage** — `Start_Date` → `Stop_Date`, normalised to `YYYY-MM-DD`
+9. **Spatial coverage** — bbox of the `location_rpt` polygon (or the point coordinates). Also write `nmdc-detail-<entryid>.geojson` to cwd so the user can open it visually.
+10. **License** — parsed from the landing page (`GET /metadata-api/landingpage/<hash>`). Look for "Use Constraints" or the `Usage:` block (rendered with a Creative Commons badge and a license name like *"Creative Commons Attribution 4.0 International License"*). If this dataset's page has no license, fetch the `PARENT`'s landing page (and its parent's, up the chain) — license is usually declared once at the Overview level and inherits to children. Only mark as "unknown" after the chain is exhausted; report which level the license came from when inherited.
+11. **File list** — parsed from the same landing page. For each `Data_URL` (excluding `PARENT`, `PART`, and `VIEW PROJECT HOME PAGE` entries — those are navigation, not data files):
     - Filename (last path segment)
-    - Type tag from `Data_URL_Type` / `Data_URL_Subtype` (`OPENDAP DATA (DODS)`, `GET DATA`, `Access to OPeNDAP service`, `PARENT`, …)
+    - Type tag from `Data_URL_Type` / `Data_URL_Subtype` (`OPENDAP DATA (DODS)`, `GET DATA`, `Access to OPeNDAP service`, …)
     - Stated size if the metadata mentions one (e.g. "190 CTD profiles", "18.7 days of data", "~340 MB")
     - URL
-11. **Landing page URL** — `landingpage` field
+12. **Landing page URL** — `landingpage` field
 
-Skip fields that are empty rather than rendering "n/a".
+Skip fields that are empty rather than rendering "n/a" — *except* the parent collection link, which must always be shown when present.
 
 ### On-demand probe
 
