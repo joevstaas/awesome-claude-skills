@@ -158,9 +158,117 @@ When the user's term doesn't match a single deepest path cleanly (e.g. `CTD` is 
 
 ### Geographic — GeoJSON workflow
 
+When a query mentions a place, never inject a hardcoded bbox into the query without showing it to the user first. The flow:
+
+1. Propose a bbox from your own knowledge of the place (e.g. inner Oslofjord ≈ `[10.4, 59.65, 10.95, 59.92]` in `[minLon, minLat, maxLon, maxLat]` order).
+2. Write `nmdc-aoi-<slug>.geojson` to the user's cwd. Slug is a kebab-case version of the place. The file is a `FeatureCollection` with one `Polygon` feature plus a `description` property.
+3. Tell the user: "Open this in [geojson.io](https://geojson.io), kepler.gl, or Mapbox to validate the area. Edit or replace the file if you want a different shape, then say 'go'."
+4. On confirmation, **re-read the file** (so any user edits are picked up). Take the first `Polygon` feature; if the user provided a `MultiPolygon` use the first polygon; if they provided a non-polygon (point, line) take its bbox and convert.
+5. Format as a `location_rpt` clause:
+
+   ```
+   location_rpt:"<op>(POLYGON((lon lat, lon lat, ..., lon lat)))"
+   ```
+
+   where the ring is closed (first vertex == last vertex) and coordinates are in **lon-lat order** (GeoJSON's native convention; matches Solr SpatialRPT). The valid operators are `Intersects` (default for "covering X" / "in X") and `IsWithin` (for "within X" / "fully inside X"). State which operator you picked in the answer.
+
+Bbox-as-polygon template (for step 5 when starting from a rectangle):
+
+```
+location_rpt:"Intersects(POLYGON((minLon minLat, maxLon minLat, maxLon maxLat, minLon maxLat, minLon minLat)))"
+```
+
+Within-conversation cache: remember slug → file path so re-asking with the same place reuses the file (no re-prompting).
+
+If you don't know a bbox for the named place, **don't guess wildly**. Ask the user to draw the area in geojson.io and save the file, then proceed from step 4.
+
+Example GeoJSON file content for "inner Oslofjord":
+
+```json
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "description": "Inner Oslofjord, north of Drøbak narrows. Edit or replace this polygon to refine the AOI."
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [10.40, 59.65],
+          [10.95, 59.65],
+          [10.95, 59.92],
+          [10.40, 59.92],
+          [10.40, 59.65]
+        ]]
+      }
+    }
+  ]
+}
+```
+
 ### Temporal
 
+Resolve natural-language periods to ISO 8601 (`YYYY-MM-DDTHH:MM:SSZ`) and pass them as `beginDate` / `endDate` query parameters. Use the conversation's current date for relative phrases.
+
+Month names — accept English **and Norwegian**:
+
+| Month | English | Norwegian |
+|---|---|---|
+| 1 | January, Jan | januar |
+| 2 | February, Feb | februar |
+| 3 | March, Mar | mars |
+| 4 | April, Apr | april |
+| 5 | May | mai |
+| 6 | June, Jun | juni |
+| 7 | July, Jul | juli |
+| 8 | August, Aug | august |
+| 9 | September, Sep | september |
+| 10 | October, Oct | oktober |
+| 11 | November, Nov | november |
+| 12 | December, Dec | desember |
+
+Forms to handle:
+
+| User input | beginDate | endDate |
+|---|---|---|
+| `2026` | `2026-01-01T00:00:00Z` | `2026-12-31T23:59:59Z` |
+| `Jan 2025` / `januar 2025` | `2025-01-01T00:00:00Z` | `2025-01-31T23:59:59Z` |
+| `Mar` (year inferred from today) | `<currentYear>-03-01T00:00:00Z` | `<currentYear>-03-31T23:59:59Z` |
+| `Jan–Mar 2025` | `2025-01-01T00:00:00Z` | `2025-03-31T23:59:59Z` |
+| `2018–2020` | `2018-01-01T00:00:00Z` | `2020-12-31T23:59:59Z` |
+| `2025–26` | `2025-01-01T00:00:00Z` | `2026-12-31T23:59:59Z` (mention: interpreted as full calendar span — narrow if you meant a season) |
+| `last month` | first day of previous month | last day of previous month |
+| `last year` | `<currentYear-1>-01-01T00:00:00Z` | `<currentYear-1>-12-31T23:59:59Z` |
+
+`dateSearchMode`:
+
+| User intent | Mode | Meaning |
+|---|---|---|
+| "data **collected/captured during** P" | `dateSearchMode=isWithin` | Dataset's coverage range is contained inside P. |
+| "data **covering/spanning/about** P" | omit (default = intersects) | Dataset's coverage range overlaps P. |
+
+State which mode you picked in the answer.
+
+If month-name language is mixed and ambiguous (e.g. just "mai" by itself with no other Norwegian context), ask the user.
+
 ### Combining and pagination
+
+All four clause types AND together to build `q`:
+
+```
+(*free* OR *text*) AND Provider:"…" AND Scientific_Keyword:"…>…" AND location_rpt:"Intersects(POLYGON((…)))"
+```
+
+Order doesn't matter to Solr but keep this order for readability. Temporal goes via the `beginDate` / `endDate` parameters, not in `q`.
+
+Pagination: page size is 10 (hardcoded). Pass `offset=0`, then `offset=10`, `offset=20`, … Stop when:
+
+- `offset >= numFound`, or
+- you've collected the user's requested cap (default 50 results — bump on request).
+
+Show the user the total `numFound` and how many you fetched, so they know whether to keep paging.
 
 ## Detail view
 
