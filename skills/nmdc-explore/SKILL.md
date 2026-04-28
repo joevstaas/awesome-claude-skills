@@ -274,10 +274,95 @@ Show the user the total `numFound` and how many you fetched, so they know whethe
 
 ### Default — catalog only
 
+When the user drills into a single dataset, render in this order:
+
+1. **Title** — `Entry_Title`
+2. **Identifier** — `Entry_ID`
+3. **DOI** — `Dataset_DOI` (linked as `https://doi.org/<doi>`)
+4. **Provider(s)** — parsed from the stringified array
+5. **Personnel** — first author from `Dataset_Creator`, plus `PersonFirstName` / `PersonLastName` if useful
+6. **Summary** — `Data_Summary`, first 400 characters with ellipsis if longer
+7. **Temporal coverage** — `Start_Date` → `Stop_Date`, normalised to `YYYY-MM-DD`
+8. **Spatial coverage** — bbox of the `location_rpt` polygon (or the point coordinates). Also write `nmdc-detail-<entryid>.geojson` to cwd so the user can open it visually.
+9. **License** — parsed from the landing page (`GET /metadata-api/landingpage/<hash>`). Look for "Use Constraints" or "License" anchor text. If not found, mark as "unknown".
+10. **File list** — parsed from the same landing page. For each `Data_URL`:
+    - Filename (last path segment)
+    - Type tag from `Data_URL_Type` / `Data_URL_Subtype` (`OPENDAP DATA (DODS)`, `GET DATA`, `Access to OPeNDAP service`, `PARENT`, …)
+    - Stated size if the metadata mentions one (e.g. "190 CTD profiles", "18.7 days of data", "~340 MB")
+    - URL
+11. **Landing page URL** — `landingpage` field
+
+Skip fields that are empty rather than rendering "n/a".
+
 ### On-demand probe
+
+Triggered when the user asks for **actual** sizes, link health, or freshness — phrases like "actual sizes", "check the URLs", "is this alive", "are these still up", "byte sizes".
+
+For each `Data_URL`:
+
+- For OPeNDAP endpoints: `GET <url>.dds` and `GET <url>.das` to confirm the dataset is reachable and to read variable metadata. Use these as a proxy for "alive".
+- For plain HTTP: `HEAD <url>` to read `Content-Length`, `Last-Modified`, and the status code.
+
+Render as a small table:
+
+| File | Status | Bytes | Last modified |
+|---|---|---|---|
+
+For datasets with more than 20 files, do these requests with a **max-in-flight bound of 5** and a per-request timeout of **10 seconds**. Report partial results if the host is slow rather than blocking the conversation.
+
+Don't run the on-demand probe automatically — only when the user asks. It costs N round-trips per dataset and the metadata catalog answers most questions on its own.
 
 ## ODP feasibility advisory
 
+When the user asks whether an NMDC dataset can go into ODP, classify on three axes:
+
+| Axis | Values | Verdict drivers |
+|---|---|---|
+| **Format** | NetCDF, HDF, CSV/TSV, GeoTIFF, JSON, ZIP, other | NetCDF/HDF → **file ingest** by default; **tabular** is also possible if the user wants to flatten with `xarray` (typical CTD profile files flatten to one row per `(cast, depth)`). CSV/TSV → **tabular**. GeoTIFF/JSON/ZIP/other → **file**. |
+| **Access** | OPeNDAP, HTTP, FTP, auth-required, none | OPeNDAP / HTTP → straightforward. FTP / auth-required → **manual** (out of scope for automated ingest). No `Data_URL` → **skip** (catalog-only entry). |
+| **License** | CC-BY, CC0, restricted, unknown | CC-* → fine. Restricted / unknown → **flag**, ask the user to confirm before ingest. |
+
+Output for each dataset, two parts:
+
+**1. One-paragraph verdict.** Plain language, key numbers, and the classification. Example:
+
+> *File ingest, straightforward. 3 NetCDF files (~340 MB total stated) on OPeNDAP, CC-BY 4.0. Tabular alternative possible: CTD profiles flatten naturally to one row per (cast, depth).*
+
+**2. Recipe sketch (5–10 lines, no executable code).** Tell the user which `odp-data-ingest` pattern to follow:
+
+- For **file ingest**: which SDK call (file upload), what to put in the dataset metadata (title, license, spatial / temporal bounds — all available from the catalog), and the source URL.
+- For **tabular ingest**: the columns the user will likely want in the PyArrow schema (typical: timestamp, lat/lon → WKT geometry, instrument id, measurement variables), plus a one-line note about the conversion step (e.g. "use `xarray.open_dataset(opendap_url)` then `.to_dataframe()`").
+- For **manual / skip**: explain the blocker and stop.
+
+End with: *"To actually run the ingest, switch to the `odp-data-ingest` skill."*
+
+Don't generate executable Python here — recipe sketches only. The actual code lives in `odp-data-ingest`, and that skill knows the current SDK API.
+
 ## Examples coverage
 
+| User prompt | Clauses & parameters |
+|---|---|
+| Find datasets for the One Ocean Expedition 2025-26 | `q=(*one* OR *ocean* OR *expedition*)`, `beginDate=2025-01-01T00:00:00Z`, `endDate=2026-12-31T23:59:59Z` |
+| Find CTD data | `q=*ctd*` (free text — CTD is an instrument, not a GCMD path) |
+| Find data covering the inner Oslofjord | propose bbox → write `nmdc-aoi-inner-oslofjord.geojson` → confirm → `q=location_rpt:"Intersects(POLYGON((...)))"` |
+| Find cod data in Skagerak | `q=*cod* AND location_rpt:"Intersects(POLYGON((...)))"` (Skagerrak GeoJSON workflow) |
+| Find Argo data | `q=*argo*` (free text — programme name appears in titles) |
+| Find data from the University of Bergen collected in 2026 | `q=Provider:"University of Bergen"`, `beginDate=2026-01-01T00:00:00Z`, `endDate=2026-12-31T23:59:59Z`, `dateSearchMode=isWithin` |
+| Give me an overview of all the data | `GET /metadata-api/getFacets` → render full taxonomy with counts |
+| List all the data providers | `GET /metadata-api/getFacets` → render Provider facet only |
+| Find microplastic data from Mareano | `q=(*microplastic* OR *mareano*)` (both as free text — Mareano matches in titles and provider) |
+| Find datasets captured last month | `beginDate=<first day of previous month>`, `endDate=<last day of previous month>`, `dateSearchMode=isWithin` (resolved against today) |
+
+Sort-style prompts ("the latest dataset in the Oslofjord", "most recent NIVA data") are not supported. Ask the user for a concrete period instead — the API has no `sort` parameter.
+
 ## Failure modes
+
+- **HTTP-only API.** `metadata.nmdc.no` is HTTP, not HTTPS. Note this once if the user asks; otherwise proceed without comment.
+- **5xx / timeouts.** Retry once with a short backoff (1 s). On second failure, surface the error verbatim — don't pretend it worked.
+- **0 results.** Don't dump the full Solr query at the user. Suggest one specific relaxation: drop the geo filter, widen the period, drop a facet, or fall back to free text. Pick the most-restrictive clause and offer to drop it.
+- **Provider / keyword name doesn't match a facet.** Fuzzy-match against the live `getFacets` list (similarity ≥ 0.7). Show the top 3 candidates and ask which one the user meant. If none look right, fall back to free text and say so.
+- **Place not in your geographic knowledge.** Don't guess wildly. Ask the user to draw the area in [geojson.io](https://geojson.io) and save the file, then proceed from step 4 of the geographic workflow.
+- **Sort-by-recency requested.** "Latest" / "most recent" / "newest" without a period: explain that the API doesn't sort, then offer concrete period options ("last month", "2025", "2024–2026").
+- **Norwegian month name ambiguous with English.** "Mai" is May; "Mars" is March. If the surrounding sentence is mixed-language, ask the user to clarify rather than guessing.
+- **Landing page parse fails.** If a landing page returns 404 or doesn't contain the expected fields, render the catalog fields you do have and note "landing page details unavailable — see <URL>".
+- **Probe times out on >5 files.** Don't block. Report the rows you got, mark the rest as "timeout", and let the user decide whether to retry.
