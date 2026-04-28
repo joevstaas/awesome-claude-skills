@@ -71,11 +71,90 @@ Each result document carries these fields (subset relevant to the skill):
 
 ## Query construction
 
+`q` is a Solr query — clauses joined with ` AND `. The skill's job is to map natural language to those clauses, then call `GET /metadata-api/search?q=...&offset=...&beginDate=...&endDate=...&dateSearchMode=...`.
+
+There are four clause types: free text, provider, scientific keyword, and geographic. They AND together. If the user's input doesn't clearly match a provider or keyword facet, fall back to free text — don't guess.
+
 ### Free text
+
+Split the user's free-text words, preserving anything inside double quotes as a single phrase. For each word: lowercase it, escape Lucene specials (`+ - && || ! ( ) { } [ ] ^ " ~ * ? : \ /`), wrap as `*word*`. Join with ` OR `, parenthesise if more than one term. Quoted phrases keep their quotes and skip the `*…*` wrap.
+
+| User says | Free-text clause |
+|---|---|
+| `cod` | `*cod*` |
+| `microplastic mareano` | `(*microplastic* OR *mareano*)` |
+| `"one ocean expedition"` | `"one ocean expedition"` |
+| `Argo` | `*argo*` |
+
+Free text matches against `Entry_Title` and `Data_Summary` (and a few other fields the Solr schema indexes). Programme names like Argo, Mareano, MOSAiC, and "One Ocean Expedition" generally appear in titles, so free text catches them reliably.
 
 ### Provider
 
+NMDC has ~45 providers. Get the live list from `GET /metadata-api/getFacets` and match the user's institution name case-insensitively, allowing substring matches. If multiple providers match, pick the most specific one and mention any others in the answer.
+
+Common short forms (canonical → user shorthand):
+
+| Canonical | Common shorthand |
+|---|---|
+| Institute of Marine Research | IMR, Havforskningsinstituttet, HI |
+| Norwegian Meteorological Institute | MET Norway, Met.no, MET, Meteorologisk institutt |
+| Norwegian Polar Institute | NPI, Norsk Polarinstitutt |
+| Norwegian Institute for Water Research | NIVA |
+| Geological Survey of Norway | NGU, Norges geologiske undersøkelse |
+| University of Bergen | UiB |
+| University of Oslo | UiO |
+| UiT The Arctic University of Norway | UiT |
+| Akvaplan-niva AS | Akvaplan-niva, APN |
+| Nansen Environmental and Remote Sensing Center | NERSC |
+| University Centre in Svalbard | UNIS |
+
+Emit:
+
+```
+Provider:"<canonical name>"
+```
+
+For multiple providers, OR them and parenthesise:
+
+```
+(Provider:"University of Bergen" OR Provider:"University of Oslo")
+```
+
+If the user names something that doesn't appear in the live facet list, do **not** invent a clause — show the top 3 fuzzy candidates (similarity ≥ 0.7) and ask which one they meant, or fall back to free text and say so.
+
 ### Scientific keyword
+
+The `Scientific_Keyword` facet is the CEOS GCMD hierarchy, like:
+
+```
+EARTH SCIENCE
+  > OCEANS
+    > OCEAN TEMPERATURE
+      > WATER TEMPERATURE
+      > SEA SURFACE TEMPERATURE
+    > SALINITY/DENSITY
+    > OCEAN OPTICS
+  > BIOSPHERE
+    > AQUATIC ECOSYSTEMS
+```
+
+Walk the live tree from `getFacets`. Match the user's term (case-insensitive substring) against `value` at every level. Pick the **deepest** path whose leaf substring-matches. If multiple paths tie, prefer the one with the highest `matches` count.
+
+Emit:
+
+```
+Scientific_Keyword:"<full path with > separators>"
+```
+
+Examples:
+
+| User term | Likely path |
+|---|---|
+| `temperature` | `EARTH SCIENCE>OCEANS>OCEAN TEMPERATURE` |
+| `salinity` | `EARTH SCIENCE>OCEANS>SALINITY/DENSITY>SALINITY` |
+| `chlorophyll` | `EARTH SCIENCE>OCEANS>OCEAN CHEMISTRY>CHLOROPHYLL` |
+
+When the user's term doesn't match a single deepest path cleanly (e.g. `CTD` is an instrument, not a GCMD term), **don't force it** — fall back to free text. Many practical terms (CTD, Argo, microplastic, cod) live in titles and summaries, not in GCMD.
 
 ### Geographic — GeoJSON workflow
 
