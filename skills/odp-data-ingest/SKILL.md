@@ -118,14 +118,15 @@ Define a PyArrow schema and insert rows:
 import pyarrow as pa
 
 schema = pa.schema([
-    pa.field("id", pa.string(), nullable=False),
+    pa.field("id", pa.string(), nullable=False,
+             metadata={"description": "Unique UUID primary key."}),
     pa.field("name", pa.string(), nullable=True,
-             metadata={"description": "Station name"}),
+             metadata={"description": "Human-readable station name."}),
     pa.field("value", pa.float64(), nullable=True,
-             metadata={"description": "Measured value"}),
+             metadata={"description": "Measured value (unit: °C).", "aggr": "mean"}),
     pa.field("geometry", pa.string(), nullable=True,
-             metadata={"isGeometry": "1", "index": "1",
-                        "description": "Point geometry in WKT format"}),
+             metadata={"isGeometry": "1", "index": "1", "class": "geometry",
+                       "description": "Point location in WKT format (POINT (lon lat))."}),
 ])
 
 # Create the table (idempotent if schema matches)
@@ -156,39 +157,70 @@ res.raise_for_status()
 
 ## Column-Level Metadata
 
-PyArrow field metadata can set column descriptions, classifications, and aggregation hints that appear in the ODP portal.
+PyArrow field metadata sets descriptions, classifications, and aggregation hints visible in the ODP table explorer.
+
+**Rule: every column must have a `description`.** Without it, the table explorer shows blank column headers with no context. Write descriptions in plain English; include units for numerics, possible values for categoricals, and what NULL means for nullable columns.
+
+**Rule: every spatial column must have the correct `class`.** The portal uses `class` to power its geometry/map features. Missing it means the column is not recognised as spatial even if `isGeometry` is set.
 
 ### Supported Metadata Keys
 
 | Key | Values | Effect in ODP |
 |-----|--------|---------------|
-| `isGeometry` | `"1"` | Marks column as the geometry column |
-| `index` | `"1"` | Creates a spatial index on the column |
-| `description` | Any string | Sets the column's Description in the portal |
-| `class` | `"geometry"`, `"latitude"`, `"longitude"` | Sets the column's Classification dropdown |
-| `aggr` | `"sum"`, `"mean"`, `"min"`, `"max"`, `"count"` | Aggregation hint for the column |
+| `description` | Any string | Column description shown in the table explorer — **required on every column** |
+| `class` | `"geometry"`, `"latitude"`, `"longitude"` | Spatial classification — **required on every spatial column** |
+| `isGeometry` | `"1"` | Marks the WKT geometry column (use together with `class: geometry`) |
+| `index` | `"1"` | Creates a spatial index (use together with `isGeometry`) |
+| `aggr` | `"sum"`, `"mean"`, `"min"`, `"max"`, `"count"` | Aggregation hint for numeric columns |
 
-### Example: Schema with Column Descriptions
+### Spatial Column Quick Reference
+
+| Column holds | `class` | Also set | Type |
+|---|---|---|---|
+| WKT geometry string (POINT / LINESTRING / …) | `"geometry"` | `"isGeometry": "1"`, `"index": "1"` | `pa.string()` |
+| Latitude float | `"latitude"` | — | `pa.float64()` |
+| Longitude float | `"longitude"` | — | `pa.float64()` |
+
+### Example: Full Schema with Descriptions and Spatial Tags
 
 ```python
 schema = pa.schema([
-    pa.field("id", pa.string(), nullable=False),
+    pa.field("id", pa.string(), nullable=False,
+             metadata={"description": "Unique UUID primary key."}),
     pa.field("water_location_id", pa.int64(), nullable=True,
-             metadata={"description": "Vannlokasjon-ID fra Vannmiljø"}),
+             metadata={"description": "Vannlokasjon-ID fra Vannmiljø (kilde: Vannmiljø-databasen)."}),
     pa.field("station_name", pa.string(), nullable=True,
-             metadata={"description": "Navn på målestasjonen"}),
+             metadata={"description": "Navn på målestasjonen."}),
+    pa.field("latitude", pa.float64(), nullable=True,
+             metadata={"description": "Breddegrad (WGS84, desimalgrader).",
+                       "class": "latitude"}),
+    pa.field("longitude", pa.float64(), nullable=True,
+             metadata={"description": "Lengdegrad (WGS84, desimalgrader).",
+                       "class": "longitude"}),
     pa.field("value", pa.float64(), nullable=True,
-             metadata={"description": "Målt verdi", "aggr": "mean"}),
+             metadata={"description": "Målt verdi (enhet: µg/l).", "aggr": "mean"}),
     pa.field("geometry", pa.string(), nullable=True,
              metadata={
                  "isGeometry": "1",
                  "index": "1",
-                 "description": "Punkt-geometri i WKT-format",
+                 "class": "geometry",
+                 "description": "Punkt-geometri i WKT-format (POINT (lengdegrad breddegrad)).",
              }),
 ])
 ```
 
 All metadata values must be strings. The metadata dict is passed to `pa.field(..., metadata={...})` and propagated to ODP when `ds.table.create(schema)` is called.
+
+### Writing Good Column Descriptions
+
+| Column type | What to include | Example |
+|---|---|---|
+| Numeric | Value, unit, what NULL means | `"Sea surface temperature (°C). NULL where sensor failed."` |
+| Categorical | Possible values | `"Observation type. One of: ROV, AUV, HOV, Lander, Camera Tow."` |
+| Identifier | Source system and what it identifies | `"Station ID from the Vannmiljø database."` |
+| Timestamp / year | Format and timezone if relevant | `"Year the dive was conducted."` |
+| Geometry / coords | CRS, format, what NULL means | `"Point location in WKT (POINT (lon lat), WGS84). NULL where coordinates are withheld."` |
+| Primary key | Just say it's the primary key | `"Generated UUID primary key."` |
 
 ## Working with Spatial Data (GeoJSON → ODP)
 
@@ -209,14 +241,20 @@ def geojson_geometry_to_wkt(geometry: dict) -> str | None:
 
 ### Geometry Column Metadata
 
-Mark the geometry column with special PyArrow field metadata so ODP recognizes it as spatial:
+Mark the geometry column with special PyArrow field metadata so ODP recognises it as spatial.
+**All three keys are required** — `isGeometry`, `index`, and `class`:
 
 ```python
 pa.field(
     "geometry",
     pa.string(),
     nullable=True,
-    metadata={"isGeometry": "1", "index": "1"}
+    metadata={
+        "isGeometry": "1",
+        "index": "1",
+        "class": "geometry",
+        "description": "Point location in WKT format (POINT (lon lat), WGS84).",
+    }
 )
 ```
 
