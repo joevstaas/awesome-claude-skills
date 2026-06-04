@@ -1,5 +1,6 @@
 ---
 description: Build interactive maps with Mapbox GL JS and ODP geodata in Next.js — covers setup, dynamic imports, CSS loading, geometry conversion, layer management, and common pitfalls
+name: mapbox-odp-maps
 ---
 
 # Mapbox GL + ODP Maps Skill
@@ -139,32 +140,234 @@ export default function RootLayout({
 
 ### 5. Map Container Sizing
 
-The map container MUST have explicit dimensions. Use `h-full w-full` with a parent that has a defined height:
+The map container MUST have explicit dimensions. The most reliable pattern is CSS Grid on the page section with the map area as the `1fr` row, and `position: absolute; inset: 0` on the map component root inside a `position: relative; overflow: hidden` wrapper:
 
 ```tsx
-// In the map component
-return (
-  <div className="relative h-full w-full">
-    <div ref={mapContainer} className="h-full w-full" />
-    {/* Overlays go here */}
+// In the page — use CSS Grid so the map row gets a real computed height
+<section style={{ height: "100dvh", display: "grid", gridTemplateRows: "auto 1fr auto" }}>
+  <header>...</header>
+
+  {/* Map wrapper: relative + overflow:hidden gives the absolute child a real size */}
+  <div style={{ position: "relative", overflow: "hidden" }}>
+    <MapView />
   </div>
-);
 
-// In the page — parent MUST have height
-<div className="relative flex-1">
-  <MapView />
-</div>
+  <footer>...</footer>
+</section>
 ```
 
-**Common pitfall**: Using `absolute inset-0` on the map container. This can cause the map canvas to render at the wrong size. Use `h-full w-full` instead.
+```tsx
+// In the map component — absolute inset-0 fills the relative parent unconditionally
+export default function MapView() {
+  return (
+    <div style={{ position: "absolute", inset: 0 }}>
+      <div ref={mapContainer} style={{ width: "100%", height: "100%" }} />
+      {/* Overlays go here */}
+    </div>
+  );
+}
+```
 
-**Height chain**: Ensure every ancestor up to the page root has a defined height. Typical pattern:
+**Why not `h-full w-full`?** In Tailwind v4 with Next.js/Turbopack, `h-full` depends on every ancestor having an explicit `height` (not `min-height`). This chain breaks easily when using `flex-1` or `min-h-0` patterns — the Mapbox canvas initialises at 0×0 and the map is invisible even though data loads. `absolute inset-0` bypasses the chain entirely and always works.
+
+**Also call `map.resize()` at the start of the `load` handler** to ensure the canvas matches the container's final rendered size:
+
+```tsx
+map.current.on("load", async () => {
+  if (!map.current) return;
+  map.current.resize(); // ← always do this first
+  // ... add sources and layers
+});
 ```
-div.h-screen.flex.flex-col
-  header.flex-shrink-0
-  main.flex-1.overflow-hidden    ← use relative here
-    MapView                      ← h-full w-full
+
+## ODP Vector Tiles — Preferred for Large Datasets
+
+For datasets with thousands of features (e.g. float positions, trajectories), use ODP's vector tile API instead of fetching GeoJSON. Tiles are served on demand per zoom/tile, scale to millions of features, and require no backend proxy.
+
+### Tile URL pattern
+
+```typescript
+const ODP_BASE_URL = "https://api.hubocean.earth";
+const TILE_URL =
+  `${ODP_BASE_URL}/api/table/v2/tile?` +
+  `table_id=${DATASET_UUID}&z={z}&x={x}&y={y}`;
 ```
+
+The ODP tile API uses the standard `{z}/{x}/{y}` template — pass it directly to the Mapbox source.
+
+### Auth injection via `transformRequest`
+
+Inject the ODP API key for tile requests using Mapbox's `transformRequest` option. This eliminates the need for a backend proxy and works for all tile requests automatically:
+
+```typescript
+import mapboxgl, { RequestParameters } from "mapbox-gl";
+
+const ODP_HOSTNAME = new URL(ODP_BASE_URL).hostname; // "api.hubocean.earth"
+
+const map = new mapboxgl.Map({
+  // ...
+  transformRequest: (url: string): RequestParameters => {
+    try {
+      const u = new URL(url);
+      if (u.hostname === ODP_HOSTNAME && readKey) {
+        return { url, headers: { Authorization: `ApiKey ${readKey}` } };
+      }
+    } catch {
+      // not a parsable URL — leave it alone
+    }
+    return { url };
+  },
+});
+```
+
+The key used here must be a **read-only public key** (`NEXT_PUBLIC_ODP_API_KEY_READ`) since it's exposed client-side. Keep write keys server-side only.
+
+### Vector source and layer setup
+
+```typescript
+map.addSource("argo-floats", {
+  type: "vector",
+  tiles: [TILE_URL],
+  minzoom: 0,
+  maxzoom: 8,
+});
+
+map.addLayer({
+  id: "argo-float-positions",
+  type: "circle",
+  source: "argo-floats",
+  "source-layer": "main",  // ODP always uses "main" as the source layer name
+  paint: {
+    "circle-color": [
+      "match", ["get", "float_type"],
+      "core", "#38bdf8",
+      "bgc",  "#4ade80",
+      "deep", "#fb923c",
+      "#94a3b8",
+    ],
+    "circle-radius": [
+      "interpolate", ["linear"], ["zoom"],
+      0, 2, 3, 3, 6, 5, 10, 7,
+    ],
+  },
+});
+```
+
+**Key details:**
+- `source-layer: "main"` — ODP vector tiles always use this name
+- `maxzoom: 8` — ODP tiles are generated up to zoom 8; Mapbox overzooms beyond that
+- Add trajectory layers before point layers so points render on top
+
+## Dim + Highlight Selected Feature Pattern
+
+For selecting one feature out of many (e.g. one float out of 4000), use **two layers on the same source**: a dim base layer and a bright highlight layer filtered to the selected ID. This avoids re-fetching data and gives instant visual feedback.
+
+```typescript
+// Base layer — low opacity for all features
+map.addLayer({
+  id: "float-trajectories",
+  type: "line",
+  source: "argo-trajectories",
+  "source-layer": "main",
+  paint: {
+    "line-color": ["match", ["get", "float_type"], "bgc", "#4ade80", "#38bdf8"],
+    "line-width": 1.0,
+    "line-opacity": 0.12,  // very dim — selected float will stand out
+  },
+});
+
+// Highlight layer — starts with a filter that matches nothing
+map.addLayer({
+  id: "float-trajectory-selected",
+  type: "line",
+  source: "argo-trajectories",
+  "source-layer": "main",
+  filter: ["==", ["to-string", ["get", "wmo"]], ""],  // empty string → no match
+  paint: {
+    "line-width": 2.5,
+    "line-opacity": 0.9,
+  },
+});
+```
+
+### Updating the filter — handle pre-load arrival
+
+Selection state changes may arrive before or after the map loads. Use `loaded()` + `once("load", ...)` to cover both:
+
+```typescript
+useEffect(() => {
+  const map = mapRef.current;
+  if (!map) return;
+  const apply = () => {
+    if (!map.getLayer("float-trajectory-selected")) return;
+    const filter = ["==", ["to-string", ["get", "wmo"]], selectedWmoId ?? ""] as FilterSpecification;
+    map.setFilter("float-trajectory-selected", filter);
+    map.setFilter("argo-float-selected", filter);
+  };
+  if (map.loaded()) apply();
+  else map.once("load", apply);
+}, [selectedWmoId]);
+```
+
+**Critical**: Vector tile properties that are stored as integers (like WMO numbers) come back as numbers from Mapbox. Comparing a number to a string always fails. Wrap with `["to-string", ["get", "prop"]]` before comparing to a string value — or store IDs as strings in the dataset.
+
+## Layer Controls — Visibility, Filter, Projection
+
+Use Mapbox's imperative API to update map state in response to React UI. Pass the `map` instance via a ref or prop.
+
+```typescript
+// Toggle layer visibility
+map.setLayoutProperty("float-trajectories", "visibility", checked ? "visible" : "none");
+
+// Filter by attribute (null = no filter = show all)
+const expr: FilterSpecification | null =
+  value === "all" ? null : ["==", ["get", "float_type"], value];
+map.setFilter("argo-float-positions", expr);
+
+// Switch projection
+map.setProjection(isGlobe ? "globe" : "mercator");
+```
+
+**Filtering multiple layers together**: When a type filter applies to both trajectories and point positions, call `setFilter` on each layer separately — there's no group filter API.
+
+## BBox Draw Mode
+
+To let users drag a bounding box on the map, disable `dragPan` and attach raw mouse events to the container element:
+
+```typescript
+useEffect(() => {
+  if (!drawBboxActive) {
+    map.dragPan.enable();
+    return;
+  }
+  map.dragPan.disable();
+
+  function onMouseDown(e: MouseEvent) {
+    const rect = container.getBoundingClientRect();
+    dragStart.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+  function onMouseUp(e: MouseEvent) {
+    if (!dragStart.current) return;
+    const rect = container.getBoundingClientRect();
+    const x2 = e.clientX - rect.left;
+    const y2 = e.clientY - rect.top;
+    const sw = map.unproject([Math.min(dragStart.current.x, x2), Math.max(dragStart.current.y, y2)]);
+    const ne = map.unproject([Math.max(dragStart.current.x, x2), Math.min(dragStart.current.y, y2)]);
+    onBboxChange([sw.lng, sw.lat, ne.lng, ne.lat]);
+    dragStart.current = null;
+  }
+
+  container.addEventListener("mousedown", onMouseDown);
+  container.addEventListener("mouseup", onMouseUp);
+  return () => {
+    container.removeEventListener("mousedown", onMouseDown);
+    container.removeEventListener("mouseup", onMouseUp);
+    map.dragPan.enable();
+  };
+}, [drawBboxActive]);
+```
+
+Render the live rectangle as an absolutely-positioned `div` with `pointer-events-none` so it doesn't interfere with mouse events on the container.
 
 ## ODP → GeoJSON Pipeline
 
@@ -510,8 +713,9 @@ The CSP must whitelist Mapbox domains for tiles, styles, workers, and telemetry.
 6. **Version mismatch**: If using CDN CSS, version must match `npm ls mapbox-gl` version.
 
 ### WebGL / canvas issues
-7. **Canvas renders at wrong size**: Use `h-full w-full` on the map container div, NOT `absolute inset-0`. Mapbox calculates canvas size from container dimensions.
-8. **Map.resize() needed**: If the container resizes after map init (e.g., panel toggle), call `map.resize()`.
+7. **Canvas renders at 0×0 (invisible map, but data loads fine)**: `h-full w-full` on the map root fails when the Tailwind/CSS height chain breaks (e.g. `flex-1`, `min-h-0`, or `min-height` instead of `height` on an ancestor). Use `position: absolute; inset: 0` inside a `position: relative; overflow: hidden` wrapper — this is independent of the height chain. See "Map Container Sizing" above.
+8. **Map.resize() needed**: Call `map.current.resize()` at the start of every `load` handler, not just on container resize events. The canvas may have been sized before the container reached its final layout dimensions.
+9. **8-digit hex colors not supported**: Mapbox paint properties do not accept CSS 8-digit hex (`#00000033`). Use `rgba(0, 0, 0, 0.2)` instead. This throws a console error and silently drops the paint property.
 
 ### ODP data issues
 9. **Auth header format**: Use `ApiKey {key}`, not `Bearer {key}`.
@@ -521,17 +725,26 @@ The CSP must whitelist Mapbox domains for tiles, styles, workers, and telemetry.
 13. **NaN/null values**: Arrow data often contains NaN for missing values. Check with `typeof val === "number" && isNaN(val)`.
 14. **BigInt values**: Arrow may return BigInt for integer columns. Convert with `Number(val)` before JSON serialization.
 
+### Vector tile issues
+15. **`source-layer` required**: Vector sources must specify `"source-layer": "main"` on every layer. Omitting it silently renders nothing.
+16. **Numeric ID filter mismatch**: Properties stored as integers (e.g. WMO numbers) arrive as numbers from vector tiles. `["==", ["get", "wmo"], "1234567"]` will never match. Use `["==", ["to-string", ["get", "wmo"]], "1234567"]`.
+17. **Filter arrives before load**: If `selectedId` state changes before the map finishes loading, `setFilter` will throw. Use `if (map.loaded()) apply(); else map.once("load", apply)`.
+18. **`transformRequest` try/catch required**: Mapbox passes internal non-URL strings to `transformRequest`. Always wrap `new URL(url)` in try/catch or the map will crash on startup.
+
+### Antimeridian artifacts
+19. **Horizontal lines across map from trajectories**: Floats that drift across the ±180° longitude boundary produce a line connecting the last point before the crossing to the first point after — spanning the entire map horizontally. Mapbox cannot fix this at render time. **Must be fixed at ingestion**: detect `|Δlon| > 180°` between consecutive points and split the coordinate sequence into a `MULTILINESTRING`. Single-point segments at a crossing boundary should be discarded. See `_split_antimeridian()` in `skills/_argo_index.py` for a reference implementation.
+
 ### Popup issues
-15. **Low contrast text**: Mapbox popup default styles can make text nearly invisible. Always set explicit `color` on all text elements inside popup HTML (see Popup Styling section).
+20. **Low contrast text**: Mapbox popup default styles can make text nearly invisible. Always set explicit `color` on all text elements inside popup HTML (see Popup Styling section).
 
 ### Event handler issues
-16. **Stale closure in click/hover handlers**: Map event handlers capture the closure at registration time. If callback props change later, handlers use stale values. Use a `useRef` to always read the latest callback (see "Stale Closures" section above).
-17. **Null map after async**: After any `await` inside a map `useEffect`, check `if (!map.current) return` — the map may have been destroyed. Never use `map.current!`.
+21. **Stale closure in click/hover handlers**: Map event handlers capture the closure at registration time. If callback props change later, handlers use stale values. Use a `useRef` to always read the latest callback (see "Stale Closures" section above).
+22. **Null map after async**: After any `await` inside a map `useEffect`, check `if (!map.current) return` — the map may have been destroyed. Never use `map.current!`.
 
 ### Vercel deployment
-18. **Serverless timeout**: Hobby plan has 10s timeout. Large ODP datasets may exceed this. Use `sample` parameter to limit rows.
-19. **Bundle size**: `apache-arrow` is large. Keep it server-side only with `serverExternalPackages`.
-20. **Security headers not applied**: `next.config.ts headers()` and middleware may not set headers on cached pages. Use `vercel.json` headers instead (see "Security Headers on Vercel" section).
+23. **Serverless timeout**: Hobby plan has 10s timeout. Large ODP datasets may exceed this. Use `sample` parameter to limit rows, or switch to vector tiles which are served on demand.
+24. **Bundle size**: `apache-arrow` is large. Keep it server-side only with `serverExternalPackages`.
+25. **Security headers not applied**: `next.config.ts headers()` and middleware may not set headers on cached pages. Use `vercel.json` headers instead (see "Security Headers on Vercel" section).
 
 ## Debugging Checklist
 
