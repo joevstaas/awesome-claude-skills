@@ -11,7 +11,7 @@ Use this skill when the user wants to ingest, upload, or manage datasets in the 
 ### Python Dependencies
 
 ```bash
-pip install odp-sdk pyarrow shapely python-dotenv
+pip install odp-sdk pyarrow shapely python-dotenv h3
 ```
 
 | Package | Purpose |
@@ -19,6 +19,7 @@ pip install odp-sdk pyarrow shapely python-dotenv
 | `odp-sdk` | ODP client library (authentication, catalog, dataset operations) |
 | `pyarrow` | Define table schemas and serialize tabular data |
 | `shapely` | Convert geometries between GeoJSON and WKT (for spatial data) |
+| `h3` | Convert H3 cell ids to boundary polygons when precomputing H3-aggregated datasets |
 
 ### Authentication
 
@@ -168,7 +169,7 @@ PyArrow field metadata sets descriptions, classifications, and aggregation hints
 | Key | Values | Effect in ODP |
 |-----|--------|---------------|
 | `description` | Any string | Column description shown in the table explorer — **required on every column** |
-| `class` | `"geometry"`, `"latitude"`, `"longitude"` | Spatial classification — **required on every spatial column** |
+| `class` | `"geometry"`, `"latitude"`, `"longitude"`, `"h3_index"` | Spatial classification — **required on every spatial column** |
 | `isGeometry` | `"1"` | Marks the WKT geometry column (use together with `class: geometry`) |
 | `index` | `"1"` | Creates a spatial index (use together with `isGeometry`) |
 | `aggr` | `"sum"`, `"mean"`, `"min"`, `"max"`, `"count"` | Aggregation hint for numeric columns |
@@ -180,6 +181,35 @@ PyArrow field metadata sets descriptions, classifications, and aggregation hints
 | WKT geometry string (POINT / LINESTRING / …) | `"geometry"` | `"isGeometry": "1"`, `"index": "1"` | `pa.string()` |
 | Latitude float | `"latitude"` | — | `pa.float64()` |
 | Longitude float | `"longitude"` | — | `pa.float64()` |
+| H3 cell index string | `"h3_index"` | — | `pa.string()` |
+
+### Classifying an H3 Index Column
+
+If a table has a column holding H3 cell IDs (e.g. you pre-binned rows to an H3 grid before ingesting), tag it `class: "h3_index"` — mirrors how `class: "geometry"` works, and is what powers the "H3_index" option in the portal's per-field Classification dropdown (confirmed by inspecting the dropdown directly: it offers None / Latitude / Longitude / Geometry / H3_index, and the raw value is the lowercase `.capitalize()`-inverse of the label, i.e. `"h3_index"`):
+
+```python
+pa.field("h3_cell", pa.string(), nullable=False,
+         metadata={"class": "h3_index", "description": "H3 cell index at resolution 8."})
+```
+
+**Adding this to an already-ingested table doesn't require re-fetching your source data.** Despite this doc's older advice below about `alter()` triggering "a full re-ingestion," a schema-metadata-only change (same column names/types, just added/changed metadata) is a cheap server-side patch — confirmed live on a 7,628-row table: all rows survived untouched after altering just the `class` metadata on one column:
+
+```python
+import pyarrow as pa
+
+old_schema = ds.table.schema()
+new_fields = []
+for f in old_schema:
+    if f.name == "h3_cell":
+        meta = dict(f.metadata or {})
+        meta[b"class"] = b"h3_index"
+        f = pa.field(f.name, f.type, nullable=f.nullable, metadata=meta)
+    new_fields.append(f)
+
+ds.table.alter(pa.schema(new_fields))  # metadata-only change — existing rows are preserved
+```
+
+Reserve delete-and-recreate for actual column type/name changes, not metadata tweaks.
 
 ### Example: Full Schema with Descriptions and Spatial Tags
 
@@ -407,6 +437,47 @@ client._request(requests.Request(
 - **Geographic coverage:** There is no dedicated spatial extent endpoint for datasets. The spatial bounds shown in the portal are auto-computed from the geometry column in the tabular data. Use `additional-info` for descriptive geographic coverage text.
 - **Full PUT:** `PUT /api/catalog/v2/datasets/{datasetId}` replaces all metadata at once but requires every field — prefer the granular PATCH endpoints.
 
+## Precomputing H3-Aggregated Datasets
+
+If you're storing raw point-level data (e.g. individual sensor pings, vessel positions) and want a fast, map-friendly H3-grid summary of it, **precompute the aggregation once and ingest the small result as its own dataset** rather than aggregating live on every read. Two independent reasons for this, both confirmed in practice:
+
+1. **Live H3 aggregation over large tables is slow.** A `ds.table.aggregate(group_by="h3(geometry, N)", ...)` over ~1.5M rows took 30+ seconds — fine for a one-off script, unusable for an interactive app hitting it per request.
+2. **Correctly consuming an aggregate response outside the SDK is non-trivial** — see the `odp-data-consume` skill's aggregate-pagination gotcha. Doing the aggregation once in Python via the SDK (which already gets this right) sidesteps that entirely.
+
+Pattern (see `odp-data-consume` for the `aggregate()` call details):
+
+```python
+import h3
+import pyarrow as pa
+from shapely.geometry import Polygon
+
+# 1. Aggregate the raw table server-side (SDK handles pagination/merging correctly)
+agg_df = source_ds.table.aggregate(group_by="h3(geometry, 8)", aggr={"value": "sum"})
+# agg_df is indexed by H3 cell id, e.g. "88099e4f6bfffff" -> {"*": 12, "value": 293.1}
+
+# 2. The aggregate response only gives back the cell id string, not geometry —
+#    reconstruct the hex boundary yourself
+def cell_to_wkt_polygon(cell: str) -> str:
+    boundary = h3.cell_to_boundary(cell)          # [(lat, lng), ...] — note lat/lng order
+    ring = [(lng, lat) for lat, lng in boundary]   # WKT/GeoJSON want (lng, lat)
+    return Polygon(ring).wkt
+
+rows = [
+    {"id": new_row_id(), "h3_cell": cell, "value": row["value"], "geometry": cell_to_wkt_polygon(cell)}
+    for cell, row in agg_df.iterrows()
+]
+
+# 3. Ingest as a small, fast-to-query derived dataset — tag both spatial columns:
+schema = pa.schema([
+    pa.field("h3_cell", pa.string(), nullable=False, metadata={"class": "h3_index", "description": "..."}),
+    pa.field("value", pa.float64(), nullable=False, metadata={"description": "...", "aggr": "sum"}),
+    pa.field("geometry", pa.string(), nullable=False,
+             metadata={"isGeometry": "1", "index": "1", "class": "geometry", "description": "H3 cell boundary, WKT POLYGON."}),
+])
+```
+
+Re-run this precompute step whenever the source table refreshes; consumers then just do a normal bbox `select`, no aggregation needed at read time.
+
 ## Reading Data Back from ODP
 
 ### Download a raw file
@@ -420,7 +491,7 @@ Use the STAC API for spatial/temporal queries — see the `odp-stac-api` skill.
 
 ## Tips and Gotchas
 
-- **Table schema is immutable** — once created, you cannot change column types. You can use `ds.table.alter(new_schema)` but this triggers a full data re-ingestion. For simple metadata changes, it's often easier to delete and recreate the dataset.
+- **Table schema is immutable for column types** — once created, you cannot change a column's data type. `ds.table.alter(new_schema)` handles this by re-ingesting existing data into the new schema server-side (you don't need to re-supply rows yourself — pass `from_names` to rename/duplicate fields). But **metadata-only changes** (e.g. adding a `class` tag without touching types) are a cheap in-place patch, not a re-ingestion — confirmed by altering just one column's metadata on a 7,628-row table and seeing every row survive untouched. Don't default to delete-and-recreate for metadata tweaks.
 - **Transactions are required** — always use `with ds as tx: tx.insert(rows)` for tabular inserts.
 - **Large datasets** — for datasets with many features (>10k rows), consider batching inserts.
 - **Mixed types** — if a GeoJSON property has mixed types across features (e.g., sometimes `int`, sometimes `string`), fall back to `pa.string()` for that column.
