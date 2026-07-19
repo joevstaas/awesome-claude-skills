@@ -11,7 +11,7 @@ Use this skill when the user wants to read, query, download, or pull data from t
 ### Python Dependencies
 
 ```bash
-pip install odp-sdk pyarrow shapely pandas python-dotenv
+pip install odp-sdk pyarrow shapely pandas python-dotenv h3
 ```
 
 | Package | Purpose |
@@ -20,6 +20,7 @@ pip install odp-sdk pyarrow shapely pandas python-dotenv
 | `pyarrow` | Tabular data deserialization |
 | `shapely` | Convert WKT geometry back to GeoJSON |
 | `pandas` | DataFrame handling for tabular query results |
+| `h3` | Convert H3 cell ids back to boundary polygons from aggregate results |
 
 ### Authentication
 
@@ -195,6 +196,33 @@ result = ds.table.aggregate(
     aggr={'count': 'sum'}
 )
 # Returns H3 hex IDs as the index (e.g., "8509990ffffffff")
+```
+
+Numeric range bucketing works the same way via `buckets(column, boundary1, boundary2, ...)` as the `group_by` expression instead of `h3(...)`.
+
+### ⚠️ Always Go Through `ds.table.aggregate()` — Don't Hand-Roll the REST Call
+
+`ds.table.aggregate()` isn't a thin wrapper you can safely reimplement by POSTing to `/api/table/v2/sdk/aggregate?table_id=...` yourself (e.g. from a non-Python client). The endpoint streams back **internally-chunked partial-aggregation batches that can repeat the same group key multiple times**, each holding a partial count/sum for that key — the SDK's own `aggregate()` (`odp/tabular_v2/client/table.py`) collects every batch and then re-groups and re-sums (`pd.concat(...); total.groupby("").agg(tot_func)`) before returning. Skip that merge step and you get **silently wrong numbers, not an error**.
+
+This was confirmed the hard way: a hand-written TypeScript client that fetched the aggregate endpoint once and parsed the Arrow response directly (no re-merge) returned a different, wrong total on every identical call — 293, then 822, then 9,550-cell/44,926-cell/57,986-cell counts for the *same query* — while the SDK's `aggregate()` consistently and correctly returned 34,147 cells with a true max of 1043.8 for the same data. The reason a naive client can't easily fix this itself: the pagination/continuation signal lives in **per-batch Arrow custom metadata** (a cursor token), which high-level Arrow readers in other languages (e.g. the `apache-arrow` npm package's `tableFromIPC`) discard — replicating it means hand-parsing the raw IPC flatbuffer stream.
+
+**Practical takeaway:**
+- Doing this from Python? Just use `ds.table.aggregate()` — it's already correct.
+- Need aggregated H3/bucket results in a non-Python consumer (a web app, etc.)? Don't call the aggregate endpoint from there. Precompute the aggregation in Python once (see `odp-data-ingest`'s "Precomputing H3-Aggregated Datasets" section) and serve the small result through a normal `select`/bbox query instead.
+- Also worth knowing regardless of language: aggregating a large table (~1.5M rows) took 30+ seconds in practice — too slow for a live per-request call in an interactive app even if you get the merging right.
+
+### Converting H3 Cells Back to Geometry
+
+An `h3(geometry, N)` aggregate result only gives you the cell id string (e.g. `"88099e4f6bfffff"`) as the index — no geometry column. Reconstruct the hex boundary with the `h3` package if you need to map it:
+
+```python
+import h3
+from shapely.geometry import Polygon
+
+def cell_to_wkt_polygon(cell: str) -> str:
+    boundary = h3.cell_to_boundary(cell)          # [(lat, lng), ...]
+    ring = [(lng, lat) for lat, lng in boundary]  # WKT/GeoJSON want (lng, lat), not (lat, lng)
+    return Polygon(ring).wkt
 ```
 
 ### Result Format
@@ -495,6 +523,7 @@ def load_data(dataset_id: str):
 ## Tips and Gotchas
 
 - **Always use server-side filters on large datasets** — datasets can have millions of rows. Scanning client-side is extremely slow and will likely time out. Use the `filter` parameter on `ds.table.select()` with column filters and/or geo filters. Column and geo filters can be combined in a single expression with `AND`.
+- **Never hand-roll the `aggregate` REST call** — its response is chunked into partial-aggregation batches that can repeat the same group key, and only the SDK's `ds.table.aggregate()` correctly re-merges them (see the H3-aggregation section above). A naive single-fetch parse from another client returns silently wrong totals, not an error. If a non-Python consumer needs aggregated results, precompute them in Python and serve the small result normally.
 - **Tabular data comes in batches** — always iterate `cursor.dataframes()` and concatenate. A single batch may not contain all rows.
 - **Geometry may be WKT or Shapely objects** — the SDK sometimes returns parsed `BaseGeometry` objects instead of WKT strings. Handle both cases.
 - **NaN values are common** — nullable columns return `float('nan')` for missing values. Always check with `val != val` or `pd.isna(val)`.
