@@ -31,6 +31,24 @@ from odp.client import Client
 client = Client(api_key=os.environ["ODP_API_KEY"])
 ```
 
+#### Finding an API key
+
+If `ODP_API_KEY` isn't already set in the environment, discover one from a local project's `.env` before asking the user. ODP-related projects commonly keep the key in their `.env` file.
+
+```bash
+# Search local project roots for an ODP_API_KEY in any .env file
+grep -rhI --include='.env*' -E '^\s*ODP_API_KEY=' \
+  ~/Projects ~/projects 2>/dev/null \
+  | head -1 | sed -E 's/^\s*ODP_API_KEY=//'
+```
+
+Guidelines:
+- Prefer an already-exported `ODP_API_KEY`; only scan `.env` files if the env var is unset.
+- Search your working directories (e.g. `~/Projects`, `~/projects`) for `.env`/`.env.*` files containing `ODP_API_KEY=`.
+- If several projects define a key, they usually share the same one — take the first match, but if they differ, ask the user which project/key to use.
+- **Never print the key value back to the user or write it into committed files.** Read it, use it in-process, and pass it via an env var or directly to `Client(api_key=...)`.
+- If no key is found anywhere, ask the user for one rather than guessing.
+
 ## Two Ways to Access Data
 
 | Method | Best for | Authentication |
@@ -377,6 +395,33 @@ if meta:
 ```python
 ds = client.dataset("dataset-uuid-here")
 ```
+
+### Reading Dataset Metadata & Last-Updated Timestamp
+
+`client.dataset(uuid)` and `get_dataset_meta_by_uuid()` only expose `id`/`name`/`description`. To get timestamps, publish status, provider, license, and the tabular data version, fetch the raw catalog v2 record directly:
+
+```python
+import requests
+res = client._request(requests.Request(
+    method="GET",
+    url=client.base_url + f"/api/catalog/v2/datasets/{uuid}",
+))
+data = res.json()
+
+af = data["audit_fields"]
+print("created:", af["created_at"])          # when the dataset record was created
+print("updated:", af["updated_at"])          # last change to the record (data or metadata)
+print("tabular version:", data.get("tabular_metadata_version"))  # bumped when the TABLE changes
+print("publish status:", data.get("publish_status"), "| published_at:", data.get("published_at"))
+```
+
+Interpreting "last updated":
+- **`audit_fields.updated_at`** — most recent change to the dataset record. This is the general answer to "when was it last updated."
+- **`tabular_metadata_version`** — timestamp of the last change to the *tabular data/schema itself*. When it equals `updated_at`, the last update was a data change (not just a metadata tweak) — the strongest signal for tabular datasets.
+- **File-based datasets** — check per-file timestamps via `ds.files.list()` instead (see "Downloading Files"). A tabular-only dataset returns no files.
+- `published_at` of `0001-01-01T00:00:00Z` with `publish_status: "draft"` means the dataset was never formally published — which is also why it won't appear in the public STAC catalog even if `visibility` is `public`.
+
+The document also contains nested `audit_fields` on `provider`, `license`, and `collection` — don't confuse those with the dataset's own top-level `audit_fields`.
 
 ## STAC API: Discovering and Searching Data
 
