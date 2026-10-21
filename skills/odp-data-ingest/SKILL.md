@@ -31,7 +31,7 @@ from odp.client import Client
 client = Client(api_key="your-api-key")
 ```
 
-Store the key in an environment variable (`ODP_API_KEY`) and load via `python-dotenv` or similar.
+Store the key in an environment variable (`ODP_API_KEY`) and load via `python-dotenv` or similar. Assume ingest always needs a key, even into a public dataset (not tested); only *reading* public data works anonymously. Find the key as described in `odp-data-consume` ("Finding an API key").
 
 ## Core Concepts
 

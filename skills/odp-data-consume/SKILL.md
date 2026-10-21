@@ -24,6 +24,41 @@ pip install odp-sdk pyarrow shapely pandas python-dotenv h3
 
 ### Authentication
 
+#### What needs a key (verified Oct 2026, odp-sdk 0.28.9)
+
+Access is decided by the dataset's **`visibility`**, not its `publish_status`: public *drafts* are as open as published ones.
+
+| Call | Public dataset | Private dataset |
+|------|----------------|-----------------|
+| STAC API | No key | Not listed |
+| Table data: `schema()`, `stats()`, `select()`, `aggregate()` | **No key** | Key required (401 without) |
+| Catalog record `GET /api/catalog/v2/datasets/{id}` (provider, licence, timestamps, publish status) | **Key required** (401 without) | Key required |
+| Catalog list `GET /api/catalog/v2/datasets` (every dataset you can see, public and private; ~5,000 records in one response) | Key required | Key required |
+| Writes / ingest | Key required (assumed; not tested) | Key required (assumed; not tested) |
+
+So a missing key blocks **catalog metadata and private data only**. It never blocks reading public tables, so don't report those as "blocked".
+
+#### Anonymous client for public data
+
+With no key, `Client()` falls back to an **interactive browser login** (`odp/new_client.py`, `_setup_jwt`), which hangs in an agent. To read public tables without a key, skip that step and send an empty `Authorization` header (`None` is rejected by `requests`):
+
+```python
+import requests
+from odp.client import Client
+
+client = Client.__new__(Client)              # skip __init__ and its browser-login fallback
+client.base_url = "https://api.hubocean.earth"
+client._http_client = requests.Session()
+client._auth = lambda: ""                     # anonymous; public datasets only
+
+ds = client.dataset("public-dataset-uuid")
+ds.table.schema(); ds.table.stats()           # and filtered aggregate() — all work without a key
+```
+
+This relies on private SDK attributes. Re-check it after an SDK upgrade.
+
+#### With an API key
+
 ```python
 import os
 from odp.client import Client
@@ -33,10 +68,11 @@ client = Client(api_key=os.environ["ODP_API_KEY"])
 
 #### Finding an API key
 
-Use exactly one of these two sources, in this order — **nothing else**:
+Check these sources, in this order — **nothing else**:
 
 1. The `ODP_API_KEY` environment variable (the SDK also reads it automatically, so `Client()` works without arguments).
-2. The canonical key file `~/.config/odp/.env`, containing a single line `ODP_API_KEY=...`. Load it in-process:
+2. `./.env` in the **working-directory root only** (the usual project convention), loaded in-process with `load_dotenv("./.env")`.
+3. The key file `~/.config/odp/.env`, containing a single line `ODP_API_KEY=...`. Load it in-process:
 
 ```python
 import os
@@ -48,8 +84,9 @@ client = Client(api_key=os.environ["ODP_API_KEY"])
 ```
 
 Guidelines:
-- **Do not search project folders or other `.env` files for keys.** Scanning for credentials is blocked as credential exploration in auto mode and stops the whole task — and it is the wrong habit regardless.
-- If neither source has a key, stop and ask the user to either `export ODP_API_KEY=...` or create `~/.config/odp/.env`. Keys are generated in the ODP web app under the user profile (https://app.hubocean.earth/account). Meanwhile, continue with the public STAC API for anything that doesn't need auth.
+- **Do not search subfolders, parent folders or other `.env` files for keys.** Scanning for credentials is blocked as credential exploration in auto mode and stops the whole task — and it is the wrong habit regardless. Reading the one named `./.env` is a direct lookup, not a scan.
+- If a value still looks like a placeholder (e.g. `sk_your_key_here`, or identical to `.env.example`), say so rather than reporting an auth failure.
+- If no source has a key, **name the places you checked** ("No key in `$ODP_API_KEY`, `./.env` or `~/.config/odp/.env`") rather than saying no key exists, and ask where it is. Keys are generated in the ODP web app under the user profile (https://app.hubocean.earth/account). Meanwhile, carry on with everything that doesn't need a key: STAC, and schema/stats/aggregate on public datasets via the anonymous client.
 - If an SDK call is still denied by the permission classifier even with a canonical key, don't retry variants — report it and suggest the user add a Bash allow rule for the ODP script.
 - **Never print the key value back to the user or write it into committed files.** Read it, use it in-process, and pass it via an env var or directly to `Client(api_key=...)`.
 
@@ -57,7 +94,7 @@ Guidelines:
 
 | Method | Best for | Authentication |
 |--------|----------|----------------|
-| **Python SDK** | Downloading files, querying tabular data, programmatic access | API key required |
+| **Python SDK** | Downloading files, querying tabular data, programmatic access | No key for public tables (anonymous client); key for private data and catalog records |
 | **STAC API** | Discovering collections, spatial/temporal search, browsing catalog | No auth for public data |
 
 ## Python SDK: Inspecting Table Schema
@@ -402,7 +439,7 @@ ds = client.dataset("dataset-uuid-here")
 
 ### Reading Dataset Metadata & Last-Updated Timestamp
 
-`client.dataset(uuid)` and `get_dataset_meta_by_uuid()` only expose `id`/`name`/`description`. To get timestamps, publish status, provider, license, and the tabular data version, fetch the raw catalog v2 record directly:
+`client.dataset(uuid)` and `get_dataset_meta_by_uuid()` only expose `id`/`name`/`description`. To get timestamps, publish status, provider, license, and the tabular data version, fetch the raw catalog v2 record directly. **This needs an API key even for public datasets** (401 anonymously):
 
 ```python
 import requests
