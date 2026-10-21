@@ -33,21 +33,25 @@ client = Client(api_key=os.environ["ODP_API_KEY"])
 
 #### Finding an API key
 
-If `ODP_API_KEY` isn't already set in the environment, discover one from a local project's `.env` before asking the user. ODP-related projects commonly keep the key in their `.env` file.
+Use exactly one of these two sources, in this order — **nothing else**:
 
-```bash
-# Search local project roots for an ODP_API_KEY in any .env file
-grep -rhI --include='.env*' -E '^\s*ODP_API_KEY=' \
-  ~/Projects ~/projects 2>/dev/null \
-  | head -1 | sed -E 's/^\s*ODP_API_KEY=//'
+1. The `ODP_API_KEY` environment variable (the SDK also reads it automatically, so `Client()` works without arguments).
+2. The canonical key file `~/.config/odp/.env`, containing a single line `ODP_API_KEY=...`. Load it in-process:
+
+```python
+import os
+from dotenv import load_dotenv
+from odp.client import Client
+
+load_dotenv(os.path.expanduser("~/.config/odp/.env"))
+client = Client(api_key=os.environ["ODP_API_KEY"])
 ```
 
 Guidelines:
-- Prefer an already-exported `ODP_API_KEY`; only scan `.env` files if the env var is unset.
-- Search your working directories (e.g. `~/Projects`, `~/projects`) for `.env`/`.env.*` files containing `ODP_API_KEY=`.
-- If several projects define a key, they usually share the same one — take the first match, but if they differ, ask the user which project/key to use.
+- **Do not search project folders or other `.env` files for keys.** Scanning for credentials is blocked as credential exploration in auto mode and stops the whole task — and it is the wrong habit regardless.
+- If neither source has a key, stop and ask the user to either `export ODP_API_KEY=...` or create `~/.config/odp/.env`. Keys are generated in the ODP web app under the user profile (https://app.hubocean.earth/account). Meanwhile, continue with the public STAC API for anything that doesn't need auth.
+- If an SDK call is still denied by the permission classifier even with a canonical key, don't retry variants — report it and suggest the user add a Bash allow rule for the ODP script.
 - **Never print the key value back to the user or write it into committed files.** Read it, use it in-process, and pass it via an env var or directly to `Client(api_key=...)`.
-- If no key is found anywhere, ask the user for one rather than guessing.
 
 ## Two Ways to Access Data
 
