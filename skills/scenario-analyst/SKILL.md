@@ -1,6 +1,6 @@
 ---
 name: scenario-analyst
-description: Strategic scenario analysis pipeline (drivers, 2x2 scenarios, game theory, SWOT, no-regret investments, interactive HTML portal). Use when a HUB Ocean team member wants to understand how a signal, trend or initiative shapes HUB Ocean's position toward a time horizon, including collaborative positioning such as a data commons.
+description: Strategic scenario analysis pipeline (drivers, 2x2 scenarios, game theory, SWOT, no-regret investments, interactive HTML portal). Use when a strategist wants to understand how a signal, trend or initiative shapes an organization's position toward a time horizon, in a competitive market or in a collaborative setting such as a data commons or partnership network.
 ---
 
 # Scenario Analyst — Skill v1.0
