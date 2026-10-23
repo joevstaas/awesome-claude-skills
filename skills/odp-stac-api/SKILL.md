@@ -139,13 +139,14 @@ Verified via STAC in Oct 2026. Web link for any item: `https://app.hubocean.eart
 | `6fdd5db8-4866-4634-9011-d7591ae7ddc4` | ProtectedSeas Navigator V2 — Complete Global Database | CC-BY-4.0 | All categories incl. EEZs and fishery zones; snapshot 2025-10-29 |
 | `479d9b42-cb21-4beb-8a57-8c217ad77409` | OBIS Seagrass Observations - Global | CC-BY-4.0 | Ten seagrass genera only, extracted from the full OBIS dataset on ODP |
 | `3975fa3a-52f2-4571-9ae5-9b4d8a39a65d` / `561710c3-ef82-481c-9460-b3eeaa710b66` / `c40229c8-a0de-459e-851f-303e1f929910` | Tides of Transparency - OBIS private sector classification (H3 res 2 / 4 / 6) | CC-BY-4.0 | OBIS snapshot Aug 2024; who contributed records, not species observations |
-| **unknown** | OBIS occurrence records (full) | unknown | **Not in STAC**, but exists on ODP (the seagrass item says it was extracted "from OBIS on ODP"). Get the ID from the catalog UI and fill it in here |
+| `0e3985de-ee32-4f79-94c6-01360be4f60a` | Ocean Biodiversity Information System - OBIS (full) | see catalog record | **Not in STAC**, even though it's public and published (found via the authenticated catalog list, Oct 2026). Public table, so it can be read without a key. A second public *draft* copy exists: `3234c1f6-5f2f-4f5a-acbd-7504bd9625b4` |
 
 ## Limitations and Gotchas (verified)
 
 - **No free-text search.** `q` is silently ignored — the response is just unfiltered results, which can look like a match. `filter`/CQL2, `sortby` and `fields` aren't documented either. To search by keyword: dump `/collections?limit=500` plus each relevant collection's `/collections/{id}/items?limit=100`, then match titles, descriptions and keywords locally.
-- **STAC is the public catalog, not the whole catalog.** A dataset missing from STAC (e.g. full OBIS) may still exist on ODP as draft or unlisted. Never report "not available" from STAC alone; fall back to the authenticated SDK by ID (see `odp-data-consume`) or ask the user to look it up in https://app.hubocean.earth/catalog.
-- **Global-extent items match every bbox.** A Galápagos bbox search returns ~120 items, mostly global. Filter on each item's own `bbox` to find genuinely regional data.
+- **STAC is the public catalog, not the whole catalog.** A dataset missing from STAC may still exist on ODP as public draft, private, or even public and published (full OBIS is public and published but not in STAC). Never report "not available" from STAC alone. With a key, search the catalog list (`GET /api/catalog/v2/datasets`); without one, look up by ID or ask the user to find it in https://app.hubocean.earth/catalog (see `odp-data-consume`).
+- **Public data on ODP doesn't need a key.** Public tables (schema, stats, aggregate) can be read anonymously through the SDK. A key is needed for private datasets and for catalog records (see "What needs a key" in `odp-data-consume`).
+- **Global-extent items match every bbox.** A bbox search over a small region can return ~120 items, almost all global. Filter on each item's own `bbox` to find genuinely regional data.
 - **Item `assets` are empty.** Data is reached through the SDK by item ID, not via asset hrefs. Use the `alternate` link (or the URL pattern above) for the web page.
 - **Dates are local midnight in UTC.** E.g. `2023-12-31T23:00:00Z` means 2024-01-01 at UTC+1. An end of `2024-11-30T23:00:00Z` could mean "through November" or "December month-start". Check the actual data before claiming a month is covered.
 - **Pagination:** use `offset`/`limit`, or follow the `next`/`prev` links in responses.
@@ -197,7 +198,6 @@ Verified via STAC in Oct 2026. Web link for any item: `https://app.hubocean.eart
 | Norwegian Coast | `[3, 57, 31, 71]` |
 | North Sea | `[-4, 51, 9, 62]` |
 | Southern Ocean | `[-180, -90, 180, -60]` |
-| Galápagos (marine reserve + margin, approx.) | `[-94, -3, -87, 3]` |
 | Global | `[-180, -90, 180, 90]` |
 
 ## Tips for Claude Desktop Usage

@@ -30,17 +30,17 @@ curl -s "https://api.hubocean.earth/api/stac/collections/<collection-id>/items?l
 - A bbox search returns every global-extent item. Judge regional relevance from each item's own `bbox`, not from the fact that it matched.
 
 ### 3. Catalog fallback for anything STAC doesn't list
-There is no documented keyword search in the catalog API or SDK. Lookup is by ID (and `get_dataset_meta_by_name` only matches **exact** names). So:
-1. Try `get_dataset_meta_by_name` with the most likely exact title.
-2. Otherwise ask the user to find the dataset in https://app.hubocean.earth/catalog and paste its ID (the UUID in `/catalog/dataset/<id>`).
-3. Don't guess at undocumented endpoints. `/api/catalog/v2/datasets` (list) returned 401 when tried.
+STAC only lists public, *published* datasets. Public drafts and private datasets are left out (e.g. full OBIS, `0e3985de-…`, is public and published but still isn't in STAC).
+1. **With a key:** `GET /api/catalog/v2/datasets` returns every dataset the key can see, public and private (~5,000 records in one response). Match `name`/`description` locally, as with STAC. Note `visibility` and `publish_status` for each hit.
+2. Without a key: try `get_dataset_meta_by_name` with the most likely exact title (exact matches only).
+3. Otherwise ask the user to find the dataset in https://app.hubocean.earth/catalog and paste its ID (the UUID in `/catalog/dataset/<id>`).
 
-Authentication follows `odp-data-consume`: `ODP_API_KEY` env var or `~/.config/odp/.env` only, never a search for keys. If no key is available, finish everything you can from STAC and list what's blocked.
+Authentication and key lookup follow `odp-data-consume` (see "What needs a key"). If there's no key, say which places you checked. You can still read schemas, stats and aggregates for **public** datasets with the anonymous client. Only catalog records, catalog listing and private datasets are blocked.
 
-### 4. Verify each candidate (authenticated, metadata only)
+### 4. Verify each candidate (metadata only)
 For each dataset ID:
-- **Catalog record** `GET /api/catalog/v2/datasets/{id}`: `audit_fields.created_at`/`updated_at`, `tabular_metadata_version`, `publish_status`/`published_at`, provider, licence.
-- **Schema** `ds.table.schema()`: column names, types, field descriptions. Read the units from the descriptions; don't infer them from column names.
+- **Catalog record** `GET /api/catalog/v2/datasets/{id}` (**needs a key**, even for public datasets): `audit_fields.created_at`/`updated_at`, `tabular_metadata_version`, `publish_status`/`published_at`, `visibility`, provider, licence.
+- **Schema** `ds.table.schema()` and `ds.table.stats()` (no key needed for public datasets): column names, types, field descriptions, row counts, min/max per column. Read the units from the descriptions; don't infer them from column names.
 - **Area/period check** via `ds.table.aggregate(filter=<geometry within AOI AND time range>, aggr={...})`: row count, min/max date. That confirms the dataset really covers the AOI and period. Use `aggregate`, never `select` of all rows.
 
 ### 5. Propose a common study area and period
