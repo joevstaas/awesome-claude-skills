@@ -18,6 +18,7 @@ Skills are reusable knowledge files (Markdown) that teach Claude Code domain-spe
 | [mapbox-odp-maps](skills/mapbox-odp-maps/) | Build interactive maps with [Mapbox GL JS](https://docs.mapbox.com/mapbox-gl-js/) and ODP geodata in Next.js — setup, dynamic imports, CSS loading, geometry conversion, layer management, and common pitfalls |
 | [vannmiljo](skills/vannmiljo/) | Vannmiljo data pipeline — scrape water monitoring data from [vannmiljo.miljodirektoratet.no](https://vannmiljo.miljodirektoratet.no), build GeoJSON, and ingest into ODP |
 | [nmdc-explore](skills/nmdc-explore/) | Search and inspect datasets in the [Norwegian Marine Data Centre (NMDC)](http://metadata.nmdc.no/UserInterface/) — natural-language queries by keyword, provider, geography, and period; dataset detail views with file lists and on-demand link/size probing; and ODP ingestion feasibility advice |
+| [scenario-analyst](skills/scenario-analyst/) | Strategic scenario analysis pipeline in six gated roles — evidence-based driver analysis, 2x2 scenarios, game theory, SWOT, no-regret investments and an executive synthesis — ending in a self-contained interactive HTML portal (`portal-spec.md`). Supports competitive and collaborative mode (e.g. a data commons). Based on a skill shared by [Jan Eivind Danielsen](https://www.linkedin.com/in/danielsenconsulting) |
 
 ## Installation
 
