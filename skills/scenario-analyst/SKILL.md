@@ -35,7 +35,7 @@ These apply across every role:
 Before Role 1, determine the mode from the query and state it in one line.
 
 - **Competitive mode** (default): the subject competes for position in a market. Use the roles as written.
-- **Collaborative mode**: the subject proposes shared infrastructure, a data commons, a partnership network, or a public-good initiative (for example an "Oslofjord data commons"). Apply the **Collaborative adaptations** noted in Roles 3–6.
+- **Collaborative mode**: the subject proposes shared infrastructure, a data commons, a partnership network, or a public-good initiative (for example a regional environmental data commons). Apply the **Collaborative adaptations** noted in Roles 3–6.
 
 In collaborative mode, actors are not primarily competitors. The core questions are: who must contribute for the commons to work, who benefits, who could block or duplicate it, and what makes the subject the trusted host or facilitator.
 
@@ -369,14 +369,15 @@ KNOWLEDGE BASE: [Optional: "see knowledge/", or paste background context]
 **Example:**
 
 ```
-ANALYZE: How can HUB Ocean position an "Oslofjord data commons" – a shared data
-         foundation and knowledge graph of regulations, plans, measures,
-         initiatives, organizations and funding sources – among the public,
-         private and voluntary actors working to improve the ecological state
-         of the Oslofjord?
-SUBJECT: HUB Ocean, new partner in Pådriv and "Oppdrag: Fjorden vår"
+ANALYZE: How can a non-profit data organization position a regional "river basin
+         data commons" – a shared data foundation and knowledge graph of
+         regulations, plans, measures, initiatives, organizations and funding
+         sources – among the public, private and voluntary actors working to
+         improve water quality in the basin?
+SUBJECT: A non-profit open-data foundation, new partner in a regional
+         water-quality collaboration network
 HORIZON: 2030
-DOMAIN:  Marine management, environmental and open data, Oslofjord / Norway
+DOMAIN:  Water management, environmental and open data
 KNOWLEDGE BASE: see knowledge/
 ```
 
